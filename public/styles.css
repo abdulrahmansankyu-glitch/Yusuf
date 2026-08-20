@@ -411,10 +411,92 @@ td .cell-short { display: block; max-width: 220px; }
 .feed .item { display: flex; gap: 9px; font-size: 13px; }
 .feed .when { color: var(--ink-faint); font-size: 12px; white-space: nowrap; min-width: 100px; }
 
+/* ---------------------------------------------------------------- Phone */
+
+/*
+ * On a narrow screen the sidebar becomes a strip of chips that scrolls
+ * sideways.
+ *
+ * Left as a stacked column it was sixteen full-width rows — the whole first
+ * screen was navigation and the dashboard began below the fold, so opening the
+ * app on a phone showed no figures at all.
+ */
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; }
-  .nav-group { width: 100%; }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 9px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    /* Momentum scrolling, and no rubber-banding into the page behind it. */
+    overscroll-behavior-x: contain;
+  }
+
+  /* The name is in the topbar's own row on a phone; repeating it here would
+     cost a third of the strip. */
+  .brand { display: none; }
+
+  .nav-group {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0 4px 0 8px;
+    border-left: 1px solid var(--line);
+    font-size: 10px;
+  }
+  .nav-group:first-of-type { border-left: 0; padding-left: 0; }
+
+  .nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .nav-item[aria-current="true"] { border-color: var(--brand); }
+
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  /* The spacer would otherwise push every button onto its own line. */
+  .topbar .spacer { display: none; }
+  .topbar::before {
+    content: "Planning Tracker";
+    flex: 1 0 100%;
+    font-weight: 650;
+    font-size: 15px;
+  }
+  .topbar button { flex: 1 1 auto; font-size: 13px; padding: 7px 8px; }
+
+  .content { padding: 14px 12px 48px; }
+
+  /* Two KPIs a row reads; one is a column of enormous numbers, and four is
+     three characters wide. */
+  .kpis { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .kpi { padding: 11px 12px; }
+  .kpi .value { font-size: 23px; }
+
+  .register-grid { grid-template-columns: 1fr; gap: 8px; }
+  .register-card .rc-desc { min-height: 0; }
+
+  .page-head { flex-wrap: wrap; }
+  .page-head .spacer { display: none; }
+
+  .toolbar .grow { min-width: 100%; }
+
+  .coverage-row { grid-template-columns: 120px 1fr 52px; }
+
+  .drawer { width: 100%; }
 }
 
 @media print {
