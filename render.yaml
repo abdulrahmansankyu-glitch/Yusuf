@@ -1,0 +1,75 @@
+# One-click deploy: https://dashboard.render.com/blueprints → New Blueprint Instance
+#
+# One web service and one Postgres. The app is plain JavaScript on both sides, so
+# there is no build step — a deploy is an install and a start, and any failure
+# names the command that actually broke rather than a layer in an image.
+#
+# Free tier, with two limits worth knowing before the team relies on it:
+#
+#   * Services sleep after 15 minutes idle and take about 50 seconds to wake.
+#     `.github/workflows/keep-awake.yml` covers the working day; see DEPLOY.md.
+#   * THE FREE DATABASE IS DELETED AFTER 30 DAYS. Fine for trying the system out.
+#     Before it holds work you cannot lose, move to a paid database or to Neon's
+#     free tier, which persists — DEPLOY.md has the steps.
+
+databases:
+  - name: planning-db
+    databaseName: planning
+    user: planning
+    plan: free
+    region: frankfurt # closest Render region to Saudi Arabia
+
+services:
+  - type: web
+    name: engineering-planning-tracker
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: .
+
+    # The cheapest route that touches the app: no database query and no session,
+    # so a slow query cannot make a healthy service look dead.
+    healthCheckPath: /api/health
+
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+
+    envVars:
+      # Render's internal connection string. The tables are created on boot, in
+      # their own schema, so nothing else sharing this database can be reached by
+      # a migration tool pointed at `public`.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: planning-db
+          property: connectionString
+
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+
+      # Generated once and kept stable across deploys. Changing it signs
+      # everybody out; leaving it unset regenerates it on every restart, which
+      # signs everybody out several times a day.
+      - key: SESSION_SECRET
+        generateValue: true
+
+      # The plant's clock, so "due today" means today at the plant rather than in
+      # UTC. Saudi Arabia is UTC+3 and does not observe daylight saving.
+      - key: TZ
+        value: Asia/Riyadh
+
+      # The code the first person types to claim the administrator account.
+      # Render asks for a value when you create the blueprint. Set one: without
+      # it, whoever opens the URL first becomes the administrator.
+      - key: ACCESS_CODE
+        sync: false
+
+      # Optional — set both and the administrator is created on first boot
+      # instead of through the setup screen. Leave them blank to use the screen.
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        sync: false

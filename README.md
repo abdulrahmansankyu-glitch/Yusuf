@@ -104,10 +104,18 @@ Two details that are not obvious and both matter:
 pressed, so opening the form and thinking better of it consumes nothing and
 leaves no gap in the sequence.
 
-**The next serial is the highest issued this month plus one, never the count of
-records.** Counting would reissue a number as soon as an entry was deleted, and
-these appear on paperwork that has already left the building. Past 99 the number
-simply gets longer.
+**The next serial is the highest in that month plus one, never the count of
+records.** Counting would reissue a number the moment *any* entry was deleted,
+and these appear on paperwork that has already left the building. Taking the
+highest means deleting an older entry changes nothing.
+
+The one case it does not cover: deleting the **most recent** entry releases its
+number, so the next one issued reuses it. That is usually what you want — the
+number never left the building — but if a document has already gone out, type the
+next number in by hand rather than accepting the suggestion. Closing that gap
+properly needs a stored high-water mark per month, which is not there yet.
+
+Past 99 the number simply gets longer rather than wrapping.
 
 Adding this to another register is two lines — an `autoNumber: { field, prefix }`
 on it in [`src/registers.js`](src/registers.js).
@@ -269,6 +277,37 @@ pointed at `public` cannot reach them.
 | `TZ` | host default | The plant's timezone, so "due today" means today locally |
 
 See [`.env.example`](.env.example).
+
+---
+
+## Deploying it
+
+Three ways, in the order they are worth trying. Full steps in
+[DEPLOY.md](DEPLOY.md).
+
+**Render (free).** [`render.yaml`](render.yaml) is a blueprint: point Render at
+this repository and it creates the web service and a Postgres, generates
+`SESSION_SECRET`, and asks you for `ACCESS_CODE`. There is no build step — the
+app is plain JavaScript on both sides, so a deploy is an install and a start.
+
+Two limits to know before the team relies on it: services **sleep after 15
+minutes** idle and take about 50 seconds to wake, and **the free database is
+deleted after 30 days**. [`.github/workflows/keep-awake.yml`](.github/workflows/keep-awake.yml)
+covers the first during the working day; for the second, move to a paid database
+or to Neon's free tier, which persists.
+
+**Docker, anywhere else.** [`Dockerfile`](Dockerfile) and
+[`docker-compose.yml`](docker-compose.yml) bring up the app and a Postgres
+together — the right answer for a VM or a spare machine on the plant network,
+where nothing sleeps and no database disappears after a month.
+
+**Bare Node.** `npm ci --omit=dev && npm start` behind whatever already serves
+you, with `DATABASE_URL` set.
+
+Whichever you pick, set these three or the deployment is worse than useless:
+`DATABASE_URL` (otherwise the data is a JSON file on one machine),
+`SESSION_SECRET` (otherwise everyone is signed out on every restart), and
+`ACCESS_CODE` (otherwise whoever opens the URL first becomes the administrator).
 
 ---
 

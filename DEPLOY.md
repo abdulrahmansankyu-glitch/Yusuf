@@ -1,0 +1,182 @@
+# Deploying the Engineering Planning Tracker
+
+The point of deploying is that the team stops emailing the workbook around.
+Everyone opens one URL and sees one set of data.
+
+Three routes below. **Render** is the quickest way to get a link to send round;
+**Docker** is what to use once it holds work you cannot lose.
+
+---
+
+## The three settings that matter
+
+Whichever route you take, set these. A deployment missing them is worse than
+running it on one laptop, because it *looks* shared.
+
+| Setting | Without it |
+|---|---|
+| `DATABASE_URL` | Data goes to a JSON file inside the container. On Render that file is destroyed on every deploy and every wake from sleep. |
+| `SESSION_SECRET` | Generated fresh on each boot, so everybody is signed out several times a day and blames the app. |
+| `ACCESS_CODE` | The first person to open the URL claims the administrator account. On a public URL that is whoever finds it first. |
+
+Generate the secret with:
+
+```bash
+openssl rand -hex 32
+```
+
+Also set `TZ` to the plant's timezone (`Asia/Riyadh`). Without it "due today"
+means today in UTC, and anything looked at between midnight and 03:00 local is
+working from yesterday's date.
+
+---
+
+## 1. Render — free, quickest
+
+[`render.yaml`](render.yaml) is a blueprint, so this is mostly clicking.
+
+1. Go to **[dashboard.render.com/blueprints](https://dashboard.render.com/blueprints) → New Blueprint Instance**.
+2. Connect this repository. Render reads `render.yaml` and offers one web
+   service (`engineering-planning-tracker`) and one Postgres (`planning-db`).
+3. It asks for the values marked `sync: false`:
+   - **`ACCESS_CODE`** — required. Anything the team can be told once.
+   - `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` — optional. Set them and
+     the administrator exists on first boot; leave them blank and the first
+     visitor creates it through the setup screen using the access code.
+4. **Apply**. `SESSION_SECRET` is generated for you and stays stable across
+   deploys. `DATABASE_URL` is wired to the database automatically.
+5. Open the URL. Create the administrator, then **Import workbook**.
+
+The blueprint uses the **Frankfurt** region, the closest Render offers to Saudi
+Arabia. Change `region:` in both entries if that is wrong — they must match, or
+the app reaches the database over the public internet instead of Render's
+private network.
+
+### Two free-tier limits, before the team relies on it
+
+**Services sleep after 15 minutes idle** and take about 50 seconds to wake. That
+wait shows Render's own "service waking up" page, served before this app is
+running, so it cannot be styled or skipped from here.
+
+[`.github/workflows/keep-awake.yml`](.github/workflows/keep-awake.yml) pings
+`/api/health` every five minutes, Sunday to Thursday, 05:00–17:55 local, so
+nobody meets that screen during the working day. Enable it by adding one
+repository secret:
+
+```
+TRACKER_URL = https://engineering-planning-tracker.onrender.com
+```
+
+It stops outside those hours deliberately: the free tier allows 750
+instance-hours a month per workspace, awake around the clock is about 730 of
+them, and the working-hours window is roughly 280.
+
+**The free database is deleted after 30 days.** This is the one that will bite.
+Before the tracker holds anything you cannot lose, either upgrade the Render
+database, or move to Neon — see below.
+
+### Moving to Neon (free, and it persists)
+
+1. Create a project at [neon.tech](https://neon.tech) and copy the connection
+   string.
+2. In the Render service → **Environment**, replace `DATABASE_URL` with it and
+   add `DATABASE_SSL=no-verify`. Managed Postgres presents a certificate this
+   app is not configured to chain-verify, and without that variable the
+   connection is refused.
+3. Remove the `databases:` block from `render.yaml` so the blueprint stops
+   creating the free one.
+4. Redeploy. The tables are created on boot; **export from the old deployment
+   first and import into the new one**, or you start empty.
+
+---
+
+## 2. Docker — a VM, or a machine on the plant network
+
+Nothing sleeps, nothing is deleted after thirty days, and the data stays inside
+your network.
+
+```bash
+git clone https://github.com/abdulrahmansankyu-glitch/Yusuf.git
+cd Yusuf
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+```
+SESSION_SECRET=<openssl rand -hex 32>
+ACCESS_CODE=<something the team is told once>
+POSTGRES_PASSWORD=<anything long>
+```
+
+Then:
+
+```bash
+docker compose up -d           # http://<that machine>:4200
+docker compose logs -f app     # watch it start
+```
+
+The app waits for Postgres to pass its health check before starting, so a slow
+first boot is not a crash loop. Data lives in the `db-data` volume and survives
+`docker compose down`; `docker compose down -v` deletes it.
+
+To update:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+**Back it up.** A volume on one machine is not a backup:
+
+```bash
+docker compose exec db pg_dump -U planning planning > planning-$(date +%F).sql
+```
+
+Or press **Export all** in the app — that gives you the workbook, which is the
+backup the team can actually read.
+
+---
+
+## 3. Bare Node
+
+Behind whatever already serves you:
+
+```bash
+npm ci --omit=dev
+DATABASE_URL=postgres://... SESSION_SECRET=... ACCESS_CODE=... TZ=Asia/Riyadh npm start
+```
+
+Node 20 or newer. Put it behind nginx or Caddy for TLS; the app speaks plain
+HTTP on `PORT` (default 4200) and binds all interfaces.
+
+---
+
+## Checking it worked
+
+```bash
+curl https://your-url/api/health
+```
+
+```json
+{"ok":true,"storage":"postgres","today":"2026-08-20"}
+```
+
+`"storage"` is the one to read. If it says **`file`**, `DATABASE_URL` did not
+reach the process — the app is running against a JSON file that the next deploy
+will destroy, and everything else will look completely normal until it does.
+
+---
+
+## What was verified, and where
+
+Run against a real PostgreSQL 16 before this was written: schema creation on
+boot, importing all fifteen sheets (77 records, 11 legend rows rejected), the
+dashboard figures, create/update/delete, document numbering, Excel export, and
+the activity log. Data and sessions both survive a restart, and the tables are
+created in their own `planning` schema with nothing in `public` — so a migration
+tool pointed at another application in the same database cannot reach them.
+
+The **Docker image has not been built** anywhere yet. The sandbox this was
+written in blocks Docker Hub, so `docker build` could not run. The Dockerfile is
+short and conventional, but treat the first `docker compose up` as the thing
+that proves it, not as a formality.
