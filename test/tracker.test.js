@@ -501,3 +501,19 @@ test('every exported column carries a width, including the narrow ones', async (
   });
   assert.deepEqual(missing, []);
 });
+
+test('deleting an older entry does not shift the next number', () => {
+  const august = new Date(2026, 7, 20);
+  // 03 was deleted. The next is still 06, not 05: the numbers below the highest
+  // have already gone out and must not be handed to a second document.
+  assert.equal(nextNumber(['IWS-2608-01', 'IWS-2608-02', 'IWS-2608-05'], { prefix: 'IWS' }, august), 'IWS-2608-06');
+});
+
+test('deleting the most recent entry does release its number', () => {
+  const august = new Date(2026, 7, 20);
+  // The limit of reading the highest from the records that still exist, pinned
+  // here so it is a known behaviour rather than a surprise: closing it needs a
+  // stored high-water mark per month, which the app does not keep.
+  assert.equal(nextNumber(['IWS-2608-01', 'IWS-2608-02'], { prefix: 'IWS' }, august), 'IWS-2608-03');
+  assert.equal(nextNumber(['IWS-2608-01'], { prefix: 'IWS' }, august), 'IWS-2608-02');
+});

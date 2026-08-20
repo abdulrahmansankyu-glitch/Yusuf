@@ -1,0 +1,49 @@
+# Run it on a machine the team can reach — a VM, or a spare PC on the plant
+# network:
+#
+#   cp .env.example .env      # set ACCESS_CODE and SESSION_SECRET
+#   docker compose up -d      # http://<that machine>:4200
+#
+# Unlike the free hosting, this never sleeps and the database is not deleted
+# after thirty days. It is only reachable from wherever the machine is, which
+# for a plant network is usually the point.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: planning
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-planning_dev_password}
+      POSTGRES_DB: planning
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # The app waits for this rather than crash-looping while Postgres starts.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U planning -d planning"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-4200}:4200"
+    environment:
+      DATABASE_URL: postgres://planning:${POSTGRES_PASSWORD:-planning_dev_password}@db:5432/planning
+      # A container-to-container connection on a private network, so there is no
+      # TLS to verify and forcing it would only fail.
+      DATABASE_SSL: disable
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env — openssl rand -hex 32}
+      ACCESS_CODE: ${ACCESS_CODE:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_NAME: ${ADMIN_NAME:-}
+      TZ: ${TZ:-Asia/Riyadh}
+
+volumes:
+  db-data:
