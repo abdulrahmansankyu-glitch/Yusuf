@@ -52,6 +52,19 @@ function h(tag, props = {}, ...children) {
   return element;
 }
 
+function svg(tag, props = {}, ...children) {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key, value] of Object.entries(props ?? {})) {
+    if (value === null || value === undefined || value === false) continue;
+    element.setAttribute(key, String(value));
+  }
+  for (const child of children.flat(3)) {
+    if (child === null || child === undefined || child === false) continue;
+    element.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return element;
+}
+
 const text = (value, fallback = '—') => (value === null || value === undefined || value === '' ? fallback : String(value));
 
 /** Dates are shown as the team writes them: day/month/year. */
@@ -422,6 +435,87 @@ function stackedBar(segments, total, max) {
  * sized by the size of the team and reads "5", the number who hold the course,
  * not "23" repeated down the column.
  */
+/**
+ * A donut, for part-to-whole at a glance.
+ *
+ * Legal here and not much else: five slices of one total, each a named state
+ * rather than a quantity to compare. Anything that wants two amounts compared
+ * gets a bar — a reader cannot judge two similar arcs, and the numbers are
+ * printed beside it precisely because the arcs are approximate.
+ *
+ * Drawn with a dashed stroke rather than paths: the arithmetic is one length
+ * and one offset per segment, which is far harder to get subtly wrong than arc
+ * flags and sweep directions.
+ */
+const DONUT = { size: 150, radius: 56, width: 24, gap: 3 };
+
+function donut(segments, { total, centreLabel } = {}) {
+  const sum = total ?? segments.reduce((n, seg) => n + seg.value, 0);
+  const circumference = 2 * Math.PI * DONUT.radius;
+  const present = segments.filter((seg) => seg.value > 0);
+  // With one slice there is nothing to separate, and a gap would print a notch
+  // in what is really a full ring.
+  const gap = present.length > 1 ? DONUT.gap : 0;
+
+  const centre = DONUT.size / 2;
+  let offset = 0;
+  const arcs = present.map((seg) => {
+    const length = (seg.value / sum) * circumference;
+    const drawn = Math.max(0, length - gap);
+    const arc = svg('circle', {
+      cx: centre,
+      cy: centre,
+      r: DONUT.radius,
+      fill: 'none',
+      stroke: `var(--${seg.key})`,
+      'stroke-width': DONUT.width,
+      'stroke-dasharray': `${drawn} ${circumference - drawn}`,
+      'stroke-dashoffset': -offset,
+    });
+    arc.append(svg('title', {}, `${seg.label}: ${seg.value} (${Math.round((seg.value / sum) * 100)}%)`));
+    offset += length;
+    return arc;
+  });
+
+  const ring = svg(
+    'svg',
+    { viewBox: `0 0 ${DONUT.size} ${DONUT.size}`, class: 'donut', role: 'img' },
+    // The track, so a mostly-empty ring still reads as a ring rather than as a
+    // stray arc floating on the page.
+    svg('circle', {
+      cx: centre,
+      cy: centre,
+      r: DONUT.radius,
+      fill: 'none',
+      stroke: 'var(--line-soft)',
+      'stroke-width': DONUT.width,
+    }),
+    arcs,
+    svg('text', { x: centre, y: centre - 2, class: 'donut-total' }, String(sum)),
+    svg('text', { x: centre, y: centre + 17, class: 'donut-label' }, centreLabel ?? ''),
+  );
+
+  return h(
+    'div',
+    { class: 'donut-wrap' },
+    ring,
+    h(
+      'div',
+      { class: 'donut-key' },
+      segments.map((seg) =>
+        h(
+          'div',
+          { class: 'donut-key-row' },
+          h('i', { style: `background:var(--${seg.key})` }),
+          h('span', { class: 'donut-key-label' }, seg.label),
+          h('b', {}, String(seg.value)),
+          h('span', { class: 'donut-key-pct' }, sum ? `${Math.round((seg.value / sum) * 100)}%` : '—'),
+        ),
+      ),
+    ),
+  );
+}
+
 function chartRow(label, segments, { total, value, sub, max } = {}) {
   const sum = total ?? segments.reduce((n, seg) => n + seg.value, 0);
   return h(
@@ -482,7 +576,21 @@ function overviewView(summary) {
         h('div', { class: 'note' }, k.note ?? ''),
       ),
     )),
-    h('div', { class: 'register-grid' }, summary.registers.map(registerCard)),
+    card(
+      'Every job, by state',
+      `${t.total} across ${summary.registerCount} registers`,
+      donut(
+        [
+          { key: 'overdue', label: 'Overdue', value: t.overdue },
+          { key: 'due-soon', label: 'Due soon', value: t.dueSoon },
+          { key: 'scheduled', label: 'Scheduled', value: t.scheduled },
+          { key: 'undated', label: 'No date', value: t.undated },
+          { key: 'closed', label: 'Closed', value: t.closed },
+        ],
+        { total: t.total, centreLabel: 'jobs' },
+      ),
+    ),
+    h('div', { class: 'register-grid', style: 'margin-top:14px' }, summary.registers.map(registerCard)),
     h(
       'div',
       { class: 'card', style: 'margin-top:18px' },
@@ -535,6 +643,15 @@ function overviewView(summary) {
 
 /* ---------------------------------------------------------------- Charts */
 
+/** The sequential ramp, tied to the grade rather than to its row number. */
+const PRIORITY_TOKEN = {
+  Critical: 'pri-1',
+  High: 'pri-2',
+  Medium: 'pri-3',
+  Low: 'pri-4',
+  Planned: 'pri-5',
+};
+
 const STATE_SERIES = [
   { key: 'overdue', label: 'Overdue' },
   { key: 'due-soon', label: 'Due soon' },
@@ -548,10 +665,43 @@ function chartsView(summary) {
   const busiest = [...jobs].filter((r) => r.total > 0).sort((a, b) => b.overdue - a.overdue || b.total - a.total);
   const buckets = summary.charts.dueBuckets;
   const peak = Math.max(buckets.overdue, buckets.later, ...buckets.weeks.map((w) => w.count), 1);
+  const t = summary.totals;
 
   return h(
     'div',
     {},
+    h(
+      'div',
+      { class: 'donut-grid' },
+      card(
+        'Every job, by state',
+        'All registers',
+        donut(
+          [
+            { key: 'overdue', label: 'Overdue', value: t.overdue },
+            { key: 'due-soon', label: 'Due soon', value: t.dueSoon },
+            { key: 'scheduled', label: 'Scheduled', value: t.scheduled },
+            { key: 'undated', label: 'No date', value: t.undated },
+            { key: 'closed', label: 'Closed', value: t.closed },
+          ],
+          { total: t.total, centreLabel: 'jobs' },
+        ),
+      ),
+      card(
+        'Open work, by priority',
+        null,
+        donut(
+          // Keyed by the priority itself, not by its position in the list, so a
+          // grade with nothing in it does not shift every colour below it.
+          summary.charts.byPriority.map((row) => ({
+            key: PRIORITY_TOKEN[row.priority] ?? 'pri-5',
+            label: row.priority,
+            value: row.total,
+          })),
+          { centreLabel: 'open' },
+        ),
+      ),
+    ),
     card(
       'Workload by register',
       `${jobs.length} registers`,
