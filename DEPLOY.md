@@ -35,17 +35,51 @@ working from yesterday's date.
 
 [`render.yaml`](render.yaml) is a blueprint, so this is mostly clicking.
 
+**Get a database first.** The blueprint does not create one — see *Why the
+blueprint does not create a database* below. Either:
+
+- **Neon** ([neon.tech](https://neon.tech)) — free, and it persists. Create a
+  project and copy the connection string. This is the one to pick.
+- **An existing Render Postgres** — open it and copy the **Internal Database
+  URL**. Sharing it with another application is safe: these tables are created
+  in their own `planning` schema.
+
+Then:
+
 1. Go to **[dashboard.render.com/blueprints](https://dashboard.render.com/blueprints) → New Blueprint Instance**.
 2. Connect this repository. Render reads `render.yaml` and offers one web
-   service (`engineering-planning-tracker`) and one Postgres (`planning-db`).
-3. It asks for the values marked `sync: false`:
+   service, `engineering-planning-tracker`.
+3. Give the blueprint a name, then fill in the values marked `sync: false`:
+   - **`DATABASE_URL`** — required. The connection string from above.
    - **`ACCESS_CODE`** — required. Anything the team can be told once.
    - `ADMIN_EMAIL` / `ADMIN_PASSWORD` / `ADMIN_NAME` — optional. Set them and
      the administrator exists on first boot; leave them blank and the first
      visitor creates it through the setup screen using the access code.
 4. **Apply**. `SESSION_SECRET` is generated for you and stays stable across
-   deploys. `DATABASE_URL` is wired to the database automatically.
+   deploys.
 5. Open the URL. Create the administrator, then **Import workbook**.
+
+### Why the blueprint does not create a database
+
+Render allows **one free Postgres per account**. A blueprint that creates its
+own therefore fails outright for anybody who already has one — the sync stops
+with
+
+```
+Create database planning-db
+  ✗ cannot have more than one active free tier database
+Create web service engineering-planning-tracker
+  ✗ (canceled: another action failed)
+```
+
+and nothing is deployed. Asking for a connection string instead works whether
+the database is new or already there, on Render or off it, free or paid — and
+it steers you towards a database that does not evaporate after thirty days.
+
+`DATABASE_SSL` is set to `no-verify` in the blueprint because managed Postgres
+presents a certificate this app does not chain-verify. Neon and Render both need
+it. Only a server with TLS switched off entirely — a local container — needs
+`disable` instead, which is what `docker-compose.yml` sets.
 
 The blueprint uses the **Frankfurt** region, the closest Render offers to Saudi
 Arabia. Change `region:` in both entries if that is wrong — they must match, or
@@ -71,22 +105,17 @@ It stops outside those hours deliberately: the free tier allows 750
 instance-hours a month per workspace, awake around the clock is about 730 of
 them, and the working-hours window is roughly 280.
 
-**The free database is deleted after 30 days.** This is the one that will bite.
-Before the tracker holds anything you cannot lose, either upgrade the Render
-database, or move to Neon — see below.
-
-### Moving to Neon (free, and it persists)
+**Render's own free database is deleted after 30 days.** This is the one that
+will bite, and it is why the blueprint points you at Neon instead. If you did
+use a Render free database, move before it holds anything you cannot lose:
 
 1. Create a project at [neon.tech](https://neon.tech) and copy the connection
    string.
-2. In the Render service → **Environment**, replace `DATABASE_URL` with it and
-   add `DATABASE_SSL=no-verify`. Managed Postgres presents a certificate this
-   app is not configured to chain-verify, and without that variable the
-   connection is refused.
-3. Remove the `databases:` block from `render.yaml` so the blueprint stops
-   creating the free one.
-4. Redeploy. The tables are created on boot; **export from the old deployment
-   first and import into the new one**, or you start empty.
+2. **Export all** from the running app first — that workbook is your data.
+3. In the Render service → **Environment**, replace `DATABASE_URL` with the Neon
+   string. Leave `DATABASE_SSL=no-verify` as it is.
+4. Redeploy. The tables are created on boot, empty — then import the workbook
+   you exported in step 2.
 
 ---
 

@@ -286,9 +286,14 @@ Three ways, in the order they are worth trying. Full steps in
 [DEPLOY.md](DEPLOY.md).
 
 **Render (free).** [`render.yaml`](render.yaml) is a blueprint: point Render at
-this repository and it creates the web service and a Postgres, generates
-`SESSION_SECRET`, and asks you for `ACCESS_CODE`. There is no build step — the
+this repository and it creates the web service, generates `SESSION_SECRET`, and
+asks you for `ACCESS_CODE` and a `DATABASE_URL`. There is no build step — the
 app is plain JavaScript on both sides, so a deploy is an install and a start.
+
+Bring your own Postgres — [Neon](https://neon.tech)'s free tier is the one to
+pick, because it persists. The blueprint deliberately does not create a database:
+Render allows only one free Postgres per account, so a blueprint that creates its
+own fails for anyone who already has one, taking the web service down with it.
 
 Two limits to know before the team relies on it: services **sleep after 15
 minutes** idle and take about 50 seconds to wake, and **the free database is
