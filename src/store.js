@@ -315,15 +315,47 @@ export async function openStore({ databaseUrl = process.env.DATABASE_URL, file }
   return new Store(backend, Boolean(databaseUrl));
 }
 
+/**
+ * SSL parameters carried in the connection string itself.
+ *
+ * Hosted Postgres hands you a URL ending `?sslmode=require&channel_binding=require`
+ * — Neon's does, and it is the string people paste. `pg` parses `sslmode` out of
+ * that string and applies it, and its current reading of `require` is the
+ * strictest one (`verify-full`), which silently outranks whatever `ssl` option
+ * the caller passed. Setting `DATABASE_SSL=no-verify` therefore had no effect at
+ * all, and the connection failed on certificate verification:
+ *
+ *     FAILED: self-signed certificate
+ *
+ * When `DATABASE_SSL` says what to do, these are removed so that it is the thing
+ * that decides. With `DATABASE_SSL` unset the string is left exactly as pasted,
+ * so a URL that asks for full verification still gets it.
+ */
+function stripSslParams(databaseUrl) {
+  try {
+    const url = new URL(databaseUrl);
+    url.searchParams.delete('sslmode');
+    url.searchParams.delete('channel_binding');
+    return url.toString();
+  } catch {
+    // Not a URL `new URL` can parse — a libpq keyword/value string, say. Leave
+    // it alone rather than mangling a connection string that may be perfectly
+    // valid for pg.
+    return databaseUrl;
+  }
+}
+
+export function connectionSettings(databaseUrl, mode = process.env.DATABASE_SSL) {
+  if (mode === 'disable') return { connectionString: stripSslParams(databaseUrl), ssl: false };
+  if (mode === 'no-verify') {
+    return { connectionString: stripSslParams(databaseUrl), ssl: { rejectUnauthorized: false } };
+  }
+  return { connectionString: databaseUrl };
+}
+
 async function openPg(databaseUrl) {
   const { default: pg } = await import('pg');
-  const ssl =
-    process.env.DATABASE_SSL === 'disable'
-      ? false
-      : process.env.DATABASE_SSL === 'no-verify'
-        ? { rejectUnauthorized: false }
-        : undefined;
-  const pool = new pg.Pool({ connectionString: databaseUrl, ...(ssl === undefined ? {} : { ssl }) });
+  const pool = new pg.Pool(connectionSettings(databaseUrl));
   return new PgStore(pool).init();
 }
 

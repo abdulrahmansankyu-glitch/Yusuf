@@ -24,6 +24,7 @@ import {
 import { detectHeader, readSheet, readWorkbook, suggestRegister, writeWorkbook } from '../src/excel.js';
 import { nextNumber } from '../src/autonumber.js';
 import { hashPassword, isLastAdmin, signToken, verifyPassword, verifyToken, mayUseRegister } from '../src/auth.js';
+import { connectionSettings } from '../src/store.js';
 import { summarise } from '../src/summary.js';
 
 const iso = (v) => toDateOnly(v);
@@ -516,4 +517,38 @@ test('deleting the most recent entry does release its number', () => {
   // stored high-water mark per month, which the app does not keep.
   assert.equal(nextNumber(['IWS-2608-01', 'IWS-2608-02'], { prefix: 'IWS' }, august), 'IWS-2608-03');
   assert.equal(nextNumber(['IWS-2608-01'], { prefix: 'IWS' }, august), 'IWS-2608-02');
+});
+
+/* ------------------------------------------------------------------ *
+ * Connection strings
+ * ------------------------------------------------------------------ */
+
+test('DATABASE_SSL wins over an sslmode carried in the connection string', () => {
+  // Neon hands out exactly this shape, and it is the string people paste.
+  const neon = 'postgres://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+
+  const relaxed = connectionSettings(neon, 'no-verify');
+  assert.deepEqual(relaxed.ssl, { rejectUnauthorized: false });
+  // Left in place, `pg` reads `require` as verify-full and the explicit ssl
+  // option is ignored — the connection then fails on certificate verification.
+  assert.ok(!relaxed.connectionString.includes('sslmode'));
+  assert.ok(!relaxed.connectionString.includes('channel_binding'));
+  // Everything that identifies the database survives.
+  assert.ok(relaxed.connectionString.startsWith('postgres://u:p@ep-x-pooler.eu-central-1.aws.neon.tech/neondb'));
+
+  const off = connectionSettings(neon, 'disable');
+  assert.equal(off.ssl, false);
+  assert.ok(!off.connectionString.includes('sslmode'));
+});
+
+test('an unset DATABASE_SSL leaves the connection string exactly as pasted', () => {
+  const neon = 'postgres://u:p@host/db?sslmode=verify-full';
+  const settings = connectionSettings(neon, undefined);
+  assert.equal(settings.connectionString, neon);
+  assert.equal('ssl' in settings, false, 'nothing is imposed on a string that already says what it wants');
+});
+
+test('a connection string that is not a URL is passed through untouched', () => {
+  const libpq = 'host=localhost port=5432 dbname=planning';
+  assert.equal(connectionSettings(libpq, 'no-verify').connectionString, libpq);
 });
