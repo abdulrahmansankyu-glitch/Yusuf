@@ -12,9 +12,11 @@
 # workspace. Sunday to Thursday, 05:00-18:00 local, is roughly 280 hours — the
 # service still sleeps overnight and at the weekend, when nobody is looking.
 #
-# Needs one repository secret:
-#
-#   TRACKER_URL   https://engineering-planning-tracker.onrender.com
+# The URL lives in `env` below, not in a repository secret. It is printed on
+# the service's own page and handed to anybody who uses the app — there is
+# nothing to keep secret about it, and requiring a secret meant this workflow
+# shipped switched off and stayed switched off. Set a `TRACKER_URL` repository
+# secret only if you want to override it without editing this file.
 #
 # This is a workaround for a free plan, not a fix. A paid Render instance never
 # sleeps, and this file can be deleted the day you move to one.
@@ -23,17 +25,22 @@ name: Keep awake
 
 on:
   schedule:
-    # Every 5 minutes, 02:00-14:55 UTC, Sunday to Thursday.
+    # Every 5 minutes, 03:00-19:55 UTC, every day.
     #
     # GitHub runs cron in UTC with no local-time option, so the plant's hours are
     # converted by hand: Saudi Arabia is UTC+3 and does not observe daylight
-    # saving, making this 05:00-17:55 local. Day 0 is Sunday, so 0-4 is the
-    # Sunday-to-Thursday working week.
+    # saving, making this 06:00-22:55 local — the working day with the evening on
+    # the end of it, because the app gets opened after hours too.
+    #
+    # That window is about 500 instance-hours a month against the free tier's
+    # 750, which leaves room for the service's own real traffic. Widening it to
+    # the full 24 hours would spend the entire allowance and suspend the service
+    # before month end, so this is the practical limit without paying.
     #
     # Five minutes rather than ten because GitHub's scheduled runs are best
     # effort and are often late under load — at a ten minute interval one
     # delayed run is enough to let the service sleep.
-    - cron: '*/5 2-14 * * 0-4'
+    - cron: '*/5 3-19 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -47,7 +54,8 @@ jobs:
     steps:
       - name: Ping the health endpoint
         env:
-          TRACKER_URL: ${{ secrets.TRACKER_URL }}
+          # The live service. A repository secret of the same name overrides it.
+          TRACKER_URL: ${{ secrets.TRACKER_URL || 'https://engineering-tracker.onrender.com' }}
         # `/api/health` is the cheapest route that touches the app: no database
         # query and no session. `--max-time 90` covers the case where this ping
         # is itself the request that wakes a sleeping instance.
