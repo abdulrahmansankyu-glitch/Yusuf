@@ -15,6 +15,7 @@ const state = {
   can: {},
   registers: [],
   route: { name: 'dashboard' },
+  dashboardView: 'overview',
   summary: null,
   activity: [],
   records: [],
@@ -24,6 +25,7 @@ const state = {
   drawer: null,
   importing: null,
   users: [],
+  editingUser: null,
   error: '',
   notice: '',
   busy: false,
@@ -208,7 +210,7 @@ function gate() {
 
   function paint() {
     title.replaceChildren(
-      h('div', {}, h('h1', {}, 'Engineering Planning Tracker'), h('p', {}, mode === 'signin' ? 'Sign in to continue.' : 'Create the administrator account.')),
+      h('div', {}, h('h1', {}, 'Maintenance Planning Tracker'), h('p', {}, mode === 'signin' ? 'Sign in to continue.' : 'Create the administrator account.')),
     );
     fields.replaceChildren(
       state.error ? h('div', { class: 'error' }, state.error) : null,
@@ -235,12 +237,21 @@ function gate() {
     }
   }
 
+  // Repaint only when the answer changes the form.
+  //
+  // `/api/setup` arrives a moment after the page does, and repainting
+  // unconditionally called `replaceChildren` on the fields — wiping whatever
+  // had already been typed into them. Anybody quick enough to start typing
+  // before the round trip finished lost it, which reads as the password field
+  // silently refusing to keep a password.
   api('/setup')
     .then((info) => {
-      mode = info.needsSetup ? 'setup' : 'signin';
+      const next = info.needsSetup ? 'setup' : 'signin';
+      if (next === mode) return;
+      mode = next;
       paint();
     })
-    .catch(() => paint());
+    .catch(() => {});
 
   paint();
   return h('div', { class: 'gate' }, form);
@@ -266,7 +277,7 @@ function sidebar() {
   return h(
     'nav',
     { class: 'sidebar' },
-    h('div', { class: 'brand' }, h('strong', {}, 'Planning Tracker'), h('span', {}, 'Engineering department')),
+    h('div', { class: 'brand' }, h('strong', {}, 'Planning Tracker'), h('span', {}, 'Maintenance department')),
     h(
       'button',
       {
@@ -313,11 +324,136 @@ function topbar() {
  * Dashboard
  * ------------------------------------------------------------------ */
 
+/**
+ * Three views over the same figures.
+ *
+ * They answer different questions and are read by different people: the shift
+ * lead wants the list of what is late, the manager wants the shape of the
+ * backlog, the supervisor wants to know who is carrying it. One page trying to
+ * do all three ends up doing none of them.
+ */
+const DASHBOARD_VIEWS = [
+  { id: 'overview', label: 'Overview', hint: 'What is late, and what changed' },
+  { id: 'charts', label: 'Charts', hint: 'The shape of the work' },
+  { id: 'people', label: 'People', hint: 'Who is carrying it, and what is missing' },
+];
+
 function dashboard() {
   const summary = state.summary;
   if (!summary) return h('div', { class: 'empty' }, 'Loading…');
-  const t = summary.totals;
 
+  const view = DASHBOARD_VIEWS.find((v) => v.id === state.dashboardView) ?? DASHBOARD_VIEWS[0];
+
+  return h(
+    'div',
+    {},
+    summary.restricted
+      ? h('div', { class: 'notice' }, `This account covers ${summary.registerCount} of the registers, so these figures are for those only.`)
+      : null,
+    h(
+      'div',
+      { class: 'page-head' },
+      h('div', {}, h('h1', {}, 'Dashboard'), h('p', {}, `${view.hint} · position on ${fmtDate(summary.today)}`)),
+    ),
+    h(
+      'div',
+      { class: 'tabs', role: 'tablist' },
+      DASHBOARD_VIEWS.map((tab) =>
+        h(
+          'button',
+          {
+            class: 'tab',
+            role: 'tab',
+            'aria-selected': String(tab.id === view.id),
+            onclick: () => {
+              state.dashboardView = tab.id;
+              render();
+            },
+          },
+          tab.label,
+        ),
+      ),
+    ),
+    view.id === 'overview' ? overviewView(summary) : view.id === 'charts' ? chartsView(summary) : peopleView(summary),
+  );
+}
+
+/* ---------------------------------------------------------------- Bars */
+
+/**
+ * A stacked horizontal bar.
+ *
+ * The segments carry a 2px surface gap so two adjacent states never read as one
+ * block, and every segment names its own figure on hover. Zero-length segments
+ * are dropped rather than rendered at hairline width, which would print a
+ * colour for a state that has nothing in it.
+ */
+function stackedBar(segments, total, max) {
+  const sum = total || segments.reduce((n, s) => n + s.value, 0) || 1;
+  // Bar length carries magnitude, segment length carries composition. Scaling
+  // every bar to its own total instead would make a register holding one job
+  // exactly as long as one holding eleven — which is the answer to a question
+  // nobody asked, on a chart headed "workload".
+  const width = max ? (sum / max) * 100 : 100;
+  return h(
+    'span',
+    { class: 'track-outer' },
+    h(
+      'span',
+      { class: 'track', style: `width:${Math.max(width, 1.5)}%` },
+      segments
+        .filter((segment) => segment.value > 0)
+        .map((segment) =>
+          h('span', {
+            class: `seg s-${segment.key}`,
+            style: `width:${(segment.value / sum) * 100}%`,
+            title: `${segment.label}: ${segment.value}`,
+          }),
+        ),
+    ),
+  );
+}
+
+/**
+ * One labelled bar.
+ *
+ * `total` sizes the bar; `value` is what gets printed beside it. They are
+ * separate because they are not always the same thing — a coverage row is
+ * sized by the size of the team and reads "5", the number who hold the course,
+ * not "23" repeated down the column.
+ */
+function chartRow(label, segments, { total, value, sub, max } = {}) {
+  const sum = total ?? segments.reduce((n, seg) => n + seg.value, 0);
+  return h(
+    'div',
+    { class: 'chart-row' },
+    h('span', { class: 'chart-label', title: label }, label, sub ? h('span', { class: 'sub' }, sub) : null),
+    stackedBar(segments, sum, max),
+    h('span', { class: 'chart-value' }, String(value ?? sum)),
+  );
+}
+
+function legend(series) {
+  return h(
+    'div',
+    { class: 'legend' },
+    series.map((s) => h('span', {}, h('i', { style: `background:var(--${s.key})` }), s.label)),
+  );
+}
+
+function card(title, note, body) {
+  return h(
+    'div',
+    { class: 'card', style: 'margin-top:14px' },
+    h('div', { class: 'card-head' }, h('h2', {}, title), h('div', { class: 'spacer' }), note ? h('span', { class: 'who' }, note) : null),
+    h('div', { class: 'card-body' }, body),
+  );
+}
+
+/* ---------------------------------------------------------------- Overview */
+
+function overviewView(summary) {
+  const t = summary.totals;
   const kpis = [
     { label: 'Total jobs', value: t.total, note: `${summary.registerCount} registers` },
     { label: 'Open', value: t.open },
@@ -337,10 +473,6 @@ function dashboard() {
   return h(
     'div',
     {},
-    summary.restricted
-      ? h('div', { class: 'notice' }, `This account covers ${summary.registerCount} of the registers, so these figures are for those only.`)
-      : null,
-    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Dashboard'), h('p', {}, `Position on ${fmtDate(summary.today)}`))),
     h('div', { class: 'kpis' }, kpis.map((k) =>
       h(
         'div',
@@ -398,6 +530,208 @@ function dashboard() {
           : h('div', { class: 'empty' }, 'Nothing has changed yet.'),
       ),
     ),
+  );
+}
+
+/* ---------------------------------------------------------------- Charts */
+
+const STATE_SERIES = [
+  { key: 'overdue', label: 'Overdue' },
+  { key: 'due-soon', label: 'Due soon' },
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'undated', label: 'No date' },
+  { key: 'closed', label: 'Closed' },
+];
+
+function chartsView(summary) {
+  const jobs = summary.registers.filter((r) => r.kind === 'jobs');
+  const busiest = [...jobs].filter((r) => r.total > 0).sort((a, b) => b.overdue - a.overdue || b.total - a.total);
+  const buckets = summary.charts.dueBuckets;
+  const peak = Math.max(buckets.overdue, buckets.later, ...buckets.weeks.map((w) => w.count), 1);
+
+  return h(
+    'div',
+    {},
+    card(
+      'Workload by register',
+      `${jobs.length} registers`,
+      busiest.length
+        ? h(
+            'div',
+            {},
+            h(
+              'div',
+              { class: 'chart' },
+              busiest.map((r) =>
+                chartRow(
+                  r.name,
+                  STATE_SERIES.map((s) => ({
+                    key: s.key,
+                    label: s.label,
+                    value: s.key === 'due-soon' ? r.dueSoon : r[s.key] ?? 0,
+                  })),
+                  { total: r.total, max: Math.max(...busiest.map((x) => x.total)) },
+                ),
+              ),
+            ),
+            legend(STATE_SERIES),
+          )
+        : h('div', { class: 'empty' }, 'Nothing imported yet.'),
+    ),
+
+    card(
+      'When open work falls due',
+      'Next 12 weeks',
+      h(
+        'div',
+        {},
+        h(
+          'div',
+          { class: 'columns' },
+          [
+            { label: 'Late', full: 'Already overdue', count: buckets.overdue, key: 'overdue' },
+            ...buckets.weeks.map((w) => ({ label: w.label, full: w.label, count: w.count, key: 'scheduled' })),
+            { label: '12w+', full: 'Beyond 12 weeks', count: buckets.later, key: 'scheduled' },
+            { label: 'None', full: 'No date set', count: buckets.undated, key: 'undated' },
+          ].map((bar) =>
+            h(
+              'div',
+              { class: 'column', title: `${bar.full}: ${bar.count}` },
+              h('span', { class: 'column-value' }, bar.count || ''),
+              h('span', {
+                class: `column-fill s-${bar.key}`,
+                // A bar with nothing in it keeps a 2px stub so the week is
+                // visibly present and empty, rather than absent from the axis.
+                style: `height:${bar.count ? Math.max(4, (bar.count / peak) * 100) : 0}%`,
+              }),
+              h('span', { class: 'column-label' }, bar.label),
+            ),
+          ),
+        ),
+        h('div', { class: 'field-note' }, 'Open jobs only. The first bar is work that has already slipped; the last two are work beyond the horizon and work with no date on it.'),
+      ),
+    ),
+
+    card(
+      'Open work by priority',
+      null,
+      summary.charts.byPriority.length
+        ? h(
+            'div',
+            {},
+            h(
+              'div',
+              { class: 'chart' },
+              summary.charts.byPriority.map((row) =>
+                chartRow(
+                  row.priority,
+                  [
+                    { key: 'overdue', label: 'Overdue', value: row.overdue },
+                    { key: 'scheduled', label: 'On track', value: row.total - row.overdue },
+                  ],
+                  { total: row.total, max: Math.max(...summary.charts.byPriority.map((x) => x.total)) },
+                ),
+              ),
+            ),
+            legend([
+              { key: 'overdue', label: 'Overdue' },
+              { key: 'scheduled', label: 'On track' },
+            ]),
+          )
+        : h('div', { class: 'empty' }, 'No open work.'),
+    ),
+  );
+}
+
+/* ---------------------------------------------------------------- People */
+
+function peopleView(summary) {
+  const owners = summary.charts.byOwner;
+  const sheets = summary.registers.filter((r) => r.kind === 'people');
+
+  return h(
+    'div',
+    {},
+    card(
+      'Who is carrying the open work',
+      owners.length ? `${owners.length} names` : null,
+      owners.length
+        ? h(
+            'div',
+            {},
+            h(
+              'div',
+              { class: 'chart' },
+              owners.map((o) =>
+                chartRow(
+                  o.owner,
+                  [
+                    { key: 'overdue', label: 'Overdue', value: o.overdue },
+                    { key: 'scheduled', label: 'On track', value: o.total - o.overdue },
+                  ],
+                  { total: o.total, max: Math.max(...owners.map((x) => x.total)) },
+                ),
+              ),
+            ),
+            legend([
+              { key: 'overdue', label: 'Overdue' },
+              { key: 'scheduled', label: 'On track' },
+            ]),
+            h('div', { class: 'field-note' }, 'Taken from whichever column each register uses to say who has it — Action By, Assigned To, or the supplier on a rental.'),
+          )
+        : h('div', { class: 'empty' }, 'No open work has an owner against it.'),
+    ),
+
+    sheets.length
+      ? card(
+          'People sheets',
+          `${summary.people.people} people`,
+          h(
+            'div',
+            { class: 'chart' },
+            sheets.map((sheet) =>
+              chartRow(
+                sheet.name,
+                [
+                  { key: 'closed', label: 'Filled', value: sheet.cellsFilled },
+                  { key: 'undated', label: 'Blank', value: Math.max(0, sheet.cellsTotal - sheet.cellsFilled) },
+                ],
+                {
+                  total: sheet.cellsTotal,
+                  value: `${sheet.coverage ?? 0}%`,
+                  sub: `${sheet.total} people · ${sheet.cellsFilled}/${sheet.cellsTotal} cells`,
+                },
+              ),
+            ),
+          ),
+        )
+      : null,
+
+    ...(summary.matrix ?? []).map((sheet) => {
+      const columns = sheet.coverageOrder === 'declared' ? sheet.columns : [...sheet.columns].sort((a, b) => a.percent - b.percent);
+      return card(
+        `${sheet.name} — ${sheet.cellLabel.toLowerCase()} coverage`,
+        `${sheet.people} people`,
+        h(
+          'div',
+          { class: 'chart' },
+          columns.map((column) =>
+            chartRow(
+              column.label,
+              [
+                { key: 'closed', label: 'Held', value: column.held },
+                { key: 'undated', label: 'Missing', value: column.missing },
+              ],
+              {
+                total: sheet.people,
+                value: column.held,
+                sub: column.missing ? `${column.missing} missing` : 'everybody',
+              },
+            ),
+          ),
+        ),
+      );
+    }),
   );
 }
 
@@ -991,16 +1325,174 @@ function importPage() {
  * ------------------------------------------------------------------ */
 
 function settingsPage() {
-  const form = h('form', { class: 'card-body', style: 'display:grid;gap:12px', onsubmit: add });
+  const registerOptions = state.registers.map((r) => ({ id: r.id, name: r.name }));
+
+  /**
+   * The register allow-list, as a checklist.
+   *
+   * An empty list means every register, which is the common case and must not
+   * need all fifteen ticking. Ticking nothing therefore means "all", and the
+   * label says so rather than leaving it to be guessed.
+   */
+  function registerPicker(selected, onChange) {
+    const chosen = new Set(selected ?? []);
+    const summary = h('div', { class: 'field-note' });
+    const paint = () => {
+      summary.textContent = chosen.size === 0
+        ? 'Nothing ticked — this account sees every register.'
+        : `${chosen.size} of ${registerOptions.length} registers.`;
+    };
+    paint();
+
+    const list = h(
+      'div',
+      { class: 'checklist' },
+      registerOptions.map((register) =>
+        h(
+          'label',
+          { class: 'check' },
+          h('input', {
+            type: 'checkbox',
+            checked: chosen.has(register.id),
+            onchange: (event) => {
+              if (event.target.checked) chosen.add(register.id);
+              else chosen.delete(register.id);
+              paint();
+              onChange?.([...chosen]);
+            },
+          }),
+          h('span', {}, register.name),
+        ),
+      ),
+    );
+    return { node: h('div', {}, list, summary), get: () => [...chosen] };
+  }
+
+  /* ---------------- Add somebody ---------------- */
+
+  const addPicker = registerPicker([]);
+  const addForm = h(
+    'form',
+    {
+      class: 'card-body',
+      style: 'display:grid;gap:12px;max-width:520px',
+      onsubmit: (event) => {
+        event.preventDefault();
+        add();
+      },
+    },
+    labelled('Name', h('input', { name: 'name', required: true, autocomplete: 'off' })),
+    labelled('Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
+    labelled(
+      'Password',
+      h('input', { name: 'password', type: 'password', required: true, minlength: 8, autocomplete: 'new-password' }),
+      'At least 8 characters. They can be told it once and change it later.',
+    ),
+    labelled(
+      'Role',
+      h(
+        'select',
+        { name: 'role' },
+        [
+          ['viewer', 'Viewer — read and export, nothing else'],
+          ['editor', 'Editor — add, edit, delete and import'],
+          ['admin', 'Admin — everything, plus accounts'],
+        ].map(([value, text]) => h('option', { value }, text)),
+      ),
+    ),
+    labelled('Registers', addPicker.node),
+    h('button', { class: 'primary', type: 'submit' }, 'Add account'),
+  );
+
+  /* ---------------- The people already here ---------------- */
+
+  const rows = state.users.map((user) => {
+    const editing = state.editingUser === user.id;
+    const picker = editing ? registerPicker(user.registers ?? []) : null;
+
+    return [
+      h(
+        'tr',
+        {},
+        h('td', {}, user.name, user.id === state.user?.id ? h('span', { class: 'sub' }, 'you') : null),
+        h('td', {}, user.email),
+        h(
+          'td',
+          {},
+          h(
+            'select',
+            { onchange: (event) => update(user, { role: event.target.value }) },
+            ['viewer', 'editor', 'admin'].map((role) =>
+              h('option', { value: role, selected: user.role === role }, role),
+            ),
+          ),
+        ),
+        h(
+          'td',
+          {},
+          user.registers?.length ? `${user.registers.length} of ${registerOptions.length}` : 'All',
+          ' ',
+          h(
+            'button',
+            {
+              class: 'small',
+              onclick: () => {
+                state.editingUser = editing ? null : user.id;
+                render();
+              },
+            },
+            editing ? 'Close' : 'Change',
+          ),
+        ),
+        h('td', { class: 'row-actions' }, h('button', { class: 'small danger', onclick: () => remove(user) }, 'Remove')),
+      ),
+      editing
+        ? h(
+            'tr',
+            {},
+            h(
+              'td',
+              { colspan: 5 },
+              picker.node,
+              h(
+                'div',
+                { style: 'margin-top:8px' },
+                h(
+                  'button',
+                  {
+                    class: 'small primary',
+                    onclick: async () => {
+                      await update(user, { registers: picker.get() });
+                      state.editingUser = null;
+                      render();
+                    },
+                  },
+                  'Save registers',
+                ),
+              ),
+            ),
+          )
+        : null,
+    ];
+  });
 
   return h(
     'div',
     {},
-    h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, 'Accounts'), h('p', {}, 'The role says what kind of thing somebody may do; the register list says where.'))),
+    h(
+      'div',
+      { class: 'page-head' },
+      h(
+        'div',
+        {},
+        h('h1', {}, 'Accounts'),
+        h('p', {}, 'The role says what kind of thing somebody may do; the register list says where.'),
+      ),
+    ),
     h(
       'div',
       { class: 'card' },
-      h('div', { class: 'card-head' }, h('h2', {}, 'People')),
+      h('div', { class: 'card-head' }, h('h2', {}, 'People'), h('div', { class: 'spacer' }), h('span', { class: 'who' }, `${state.users.length} ${state.users.length === 1 ? 'account' : 'accounts'}`)),
       h(
         'div',
         { class: 'table-wrap' },
@@ -1008,55 +1500,23 @@ function settingsPage() {
           'table',
           {},
           h('thead', {}, h('tr', {}, ['Name', 'Email', 'Role', 'Registers', ''].map((c) => h('th', {}, c)))),
-          h(
-            'tbody',
-            {},
-            state.users.map((user) =>
-              h(
-                'tr',
-                {},
-                h('td', {}, user.name),
-                h('td', {}, user.email),
-                h(
-                  'td',
-                  {},
-                  h(
-                    'select',
-                    { onchange: (e) => update(user, { role: e.target.value }) },
-                    ['viewer', 'editor', 'admin'].map((role) => h('option', { value: role, selected: user.role === role }, role)),
-                  ),
-                ),
-                h('td', {}, user.registers?.length ? `${user.registers.length} of ${state.registers.length}` : 'All'),
-                h('td', { class: 'row-actions' }, h('button', { class: 'small danger', onclick: () => remove(user) }, 'Remove')),
-              ),
-            ),
-          ),
+          h('tbody', {}, rows),
         ),
       ),
     ),
-    h('div', { class: 'card', style: 'margin-top:18px' }, h('div', { class: 'card-head' }, h('h2', {}, 'Add somebody')), form),
+    h(
+      'div',
+      { class: 'card', style: 'margin-top:18px' },
+      h('div', { class: 'card-head' }, h('h2', {}, 'Add somebody')),
+      addForm,
+    ),
   );
 
-  function fields() {
-    form.replaceChildren(
-      labelled('Name', h('input', { name: 'name', required: true })),
-      labelled('Email', h('input', { name: 'email', type: 'email', required: true })),
-      labelled('Password', h('input', { name: 'password', type: 'password', required: true, minlength: 8 }), 'At least 8 characters.'),
-      labelled(
-        'Role',
-        h('select', { name: 'role' }, ['viewer', 'editor', 'admin'].map((role) => h('option', { value: role }, role))),
-      ),
-      h('button', { class: 'primary', type: 'submit' }, 'Add account'),
-    );
-  }
-  fields();
-
-  async function add(event) {
-    event.preventDefault();
-    const body = Object.fromEntries(new FormData(form).entries());
+  async function add() {
+    const data = Object.fromEntries(new FormData(addForm).entries());
     try {
-      await api('/users', { method: 'POST', body });
-      flash('Account added.');
+      await api('/users', { method: 'POST', body: { ...data, registers: addPicker.get() } });
+      flash(`${data.name} can now sign in.`);
       await loadRoute();
     } catch (error) {
       fail(error);
@@ -1066,6 +1526,7 @@ function settingsPage() {
   async function update(user, changes) {
     try {
       await api(`/users/${user.id}`, { method: 'PUT', body: changes });
+      flash('Saved.');
       await loadRoute();
     } catch (error) {
       fail(error);
@@ -1073,9 +1534,10 @@ function settingsPage() {
   }
 
   async function remove(user) {
-    if (!confirm(`Remove ${user.name}?`)) return;
+    if (!confirm(`Remove ${user.name}? They will not be able to sign in again.`)) return;
     try {
       await api(`/users/${user.id}`, { method: 'DELETE' });
+      flash(`${user.name} removed.`);
       await loadRoute();
     } catch (error) {
       fail(error);

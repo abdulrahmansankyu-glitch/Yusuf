@@ -1,5 +1,5 @@
 /* ------------------------------------------------------------------ *
- * Engineering Planning Tracker
+ * Maintenance Planning Tracker
  *
  * One light theme. The pages are read on a plant desktop and printed for
  * meetings, and a dark surface that looks well on screen prints as a black
@@ -18,7 +18,7 @@
   --brand-soft: #e8f0f7;
 
   --overdue: #c0392b;
-  --due-soon: #b7791f;
+  --due-soon: #ca8a04;
   --scheduled: #2b6cb0;
   --closed: #2f855a;
   --undated: #8b95a3;
@@ -389,6 +389,145 @@ td .cell-short { display: block; max-width: 220px; }
   background: var(--paper);
 }
 
+/* ---------------------------------------------------------------- Tabs */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  padding: 8px 14px;
+  color: var(--ink-soft);
+  font-weight: 550;
+  white-space: nowrap;
+}
+.tab:hover { background: var(--line-soft); border-bottom-color: var(--line); }
+.tab[aria-selected="true"] { color: var(--brand); border-bottom-color: var(--brand); }
+
+/* ---------------------------------------------------------------- Charts */
+
+.chart { display: grid; gap: 7px; }
+
+.chart-row {
+  display: grid;
+  grid-template-columns: 190px 1fr 44px;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+}
+.chart-label {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 620;
+}
+
+/*
+ * A stacked track. The 2px gap is what stops two adjacent states reading as one
+ * block of colour, and the rounded ends sit on the outer segments only so the
+ * bar reads as one length rather than a row of separate pills.
+ */
+/* The full width a bar could occupy, so a short bar reads as short against a
+   visible track rather than as a bar that happens to end there. */
+.track-outer {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 14px;
+  background: var(--line-soft);
+  border-radius: 4px;
+}
+.track {
+  display: flex;
+  gap: 2px;
+  height: 14px;
+  min-width: 0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.track .seg { display: block; min-width: 3px; }
+.seg.s-overdue { background: var(--overdue); }
+.seg.s-due-soon { background: var(--due-soon); }
+.seg.s-scheduled { background: var(--scheduled); }
+.seg.s-undated { background: var(--undated); }
+.seg.s-closed { background: var(--closed); }
+
+/* Column chart — one bar per week. */
+.columns {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 190px;
+  padding-bottom: 2px;
+}
+.column {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  gap: 4px;
+}
+.column-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-soft);
+  min-height: 14px;
+}
+.column-fill {
+  width: 100%;
+  max-width: 46px;
+  border-radius: 4px 4px 0 0;
+  /* The track behind every column, so an empty week is visibly an empty week
+     rather than a gap in the axis. */
+  box-shadow: 0 0 0 0 transparent;
+}
+.column-fill.s-overdue { background: var(--overdue); }
+.column-fill.s-scheduled { background: var(--scheduled); }
+.column-fill.s-undated { background: var(--undated); }
+.column-label {
+  font-size: 10px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- Checklist */
+
+.checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 4px 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.check input { width: auto; margin: 0; }
+
 /* ---------------------------------------------------------------- Coverage */
 
 .coverage { display: grid; gap: 7px; }
@@ -495,6 +634,10 @@ td .cell-short { display: block; max-width: 220px; }
   .toolbar .grow { min-width: 100%; }
 
   .coverage-row { grid-template-columns: 120px 1fr 52px; }
+  .chart-row { grid-template-columns: 104px 1fr 34px; gap: 8px; font-size: 12px; }
+  .columns { height: 150px; gap: 3px; }
+  .column-label { font-size: 9px; }
+  .checklist { grid-template-columns: 1fr 1fr; max-height: 180px; }
 
   .drawer { width: 100%; }
 }

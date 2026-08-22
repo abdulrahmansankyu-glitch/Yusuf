@@ -552,3 +552,67 @@ test('a connection string that is not a URL is passed through untouched', () => 
   const libpq = 'host=localhost port=5432 dbname=planning';
   assert.equal(connectionSettings(libpq, 'no-verify').connectionString, libpq);
 });
+
+/* ------------------------------------------------------------------ *
+ * Dashboard aggregations
+ * ------------------------------------------------------------------ */
+
+test('the due chart separates already-late from the weeks ahead', () => {
+  const records = [
+    { id: '1', registerId: 'iws', data: { iwsNo: 'A', details: 'Late', etc: '2026-08-01' } },
+    { id: '2', registerId: 'iws', data: { iwsNo: 'B', details: 'This week', etc: '2026-08-24' } },
+    { id: '3', registerId: 'iws', data: { iwsNo: 'C', details: 'Next week', etc: '2026-08-31' } },
+    { id: '4', registerId: 'iws', data: { iwsNo: 'D', details: 'Far off', etc: '2027-06-01' } },
+    { id: '5', registerId: 'iws', data: { iwsNo: 'E', details: 'A phrase', etc: 'Next Shutdown' } },
+    { id: '6', registerId: 'iws', data: { iwsNo: 'F', details: 'Done', etc: '2026-08-01', status: 'Completed' } },
+  ];
+  const { dueBuckets } = summarise(records, ['iws'], '2026-08-22').charts;
+
+  assert.equal(dueBuckets.overdue, 1, 'the completed one is not counted as late');
+  assert.equal(dueBuckets.weeks[0].count, 1);
+  assert.equal(dueBuckets.weeks[1].count, 1);
+  assert.equal(dueBuckets.later, 1, 'past the horizon, not dropped');
+  assert.equal(dueBuckets.undated, 1, 'a phrase is undated, not overdue');
+});
+
+test('open work is counted by priority, closed work is not', () => {
+  const records = [
+    { id: '1', registerId: 'iws', data: { iwsNo: 'A', details: 'x', priority: 'Critical', etc: '2026-08-01' } },
+    { id: '2', registerId: 'iws', data: { iwsNo: 'B', details: 'x', priority: 'Critical', etc: '2026-09-30' } },
+    { id: '3', registerId: 'iws', data: { iwsNo: 'C', details: 'x', priority: 'Critical', status: 'Completed' } },
+  ];
+  const rows = summarise(records, ['iws'], '2026-08-22').charts.byPriority;
+  const critical = rows.find((r) => r.priority === 'Critical');
+  assert.equal(critical.total, 2);
+  assert.equal(critical.overdue, 1);
+});
+
+test('the owner chart falls back to whichever column names who has it', () => {
+  const records = [
+    // Action By.
+    { id: '1', registerId: 'gaf', data: { tagNo: 'T', jobDescription: 'x', assignedTo: 'Peter', etc: '2026-08-01' } },
+    // No owner column at all — the supplier is who it is waiting on.
+    { id: '2', registerId: 'rental-equipment', data: { equipment: 'Manlift', supplier: 'Ejar', demobilization: '2026-08-01' } },
+    // Closed work is nobody's load.
+    { id: '3', registerId: 'gaf', data: { tagNo: 'T2', jobDescription: 'y', assignedTo: 'Peter', status: 'Completed' } },
+  ];
+  const owners = summarise(records, ['gaf', 'rental-equipment'], '2026-08-22').charts.byOwner;
+  assert.deepEqual(
+    owners.map((o) => [o.owner, o.total, o.overdue]),
+    [
+      ['Peter', 1, 1],
+      ['Ejar', 1, 1],
+    ],
+  );
+});
+
+test('people sheets never reach the job charts', () => {
+  const records = [
+    { id: '1', registerId: 'safety', data: { name: 'Somebody', loto: 'Yes' } },
+    { id: '2', registerId: 'iws', data: { iwsNo: 'A', details: 'x', etc: '2026-08-01' } },
+  ];
+  const { charts, totals } = summarise(records, ['iws', 'safety'], '2026-08-22');
+  assert.equal(totals.total, 1);
+  assert.equal(charts.dueBuckets.overdue, 1);
+  assert.equal(charts.byOwner.length, 0);
+});
