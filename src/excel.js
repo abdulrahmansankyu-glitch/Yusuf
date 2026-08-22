@@ -568,7 +568,7 @@ function writeSheet(workbook, register, records) {
     fitToHeight: 0,
     margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
   };
-  worksheet.headerFooter = { oddFooter: '&LEngineering Planning Tracker&RPage &P of &N' };
+  worksheet.headerFooter = { oddFooter: '&LMaintenance Planning Tracker&RPage &P of &N' };
   worksheet.views = [{ state: 'frozen', ySplit: headerRowNumber }];
   worksheet.pageSetup.printTitlesRow = `1:${headerRowNumber}`;
 
@@ -579,7 +579,7 @@ function writeSummary(workbook, summary) {
   const worksheet = workbook.addWorksheet('Summary');
   const columns = ['Register', 'Total', 'Open', 'Closed', 'Overdue', 'Due ≤30d', 'Undated'];
 
-  worksheet.getCell('A1').value = 'ENGINEERING PLANNING TRACKER';
+  worksheet.getCell('A1').value = 'MAINTENANCE PLANNING TRACKER';
   worksheet.mergeCells(1, 1, 1, columns.length);
   worksheet.getCell('A1').alignment = { horizontal: 'center' };
   worksheet.getCell('A1').font = { bold: true, size: 14 };
@@ -623,7 +623,7 @@ function writeSummary(workbook, summary) {
  */
 export async function writeWorkbook({ recordsByRegister, summary, registerIds }) {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Engineering Planning Tracker';
+  workbook.creator = 'Maintenance Planning Tracker';
   workbook.created = new Date();
 
   if (summary) writeSummary(workbook, summary);
@@ -641,7 +641,7 @@ export async function writeTemplate(registerId) {
   const register = getRegister(registerId);
   if (!register) throw new Error(`Unknown register: ${registerId}`);
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Engineering Planning Tracker';
+  workbook.creator = 'Maintenance Planning Tracker';
   writeSheet(workbook, register, []);
   return workbook.xlsx.writeBuffer();
 }

@@ -268,8 +268,23 @@ export async function createApp({ store }) {
   app.get('/api/summary', need('read'), async (req, res) => {
     const records = await store.list();
     const visible = visibleRegisters(req.user);
+    // Per-column coverage for the people sheets, so the dashboard can say which
+    // course the fewest people hold without a request per register.
+    const matrix = visible
+      .map((id) => getRegister(id))
+      .filter((register) => register?.matrix)
+      .map((register) => ({
+        id: register.id,
+        name: register.name,
+        cellLabel: register.matrix.cellLabel,
+        coverageOrder: register.matrix.coverageOrder ?? 'thinnest',
+        ...matrixCoverage(register, records),
+      }))
+      .filter((entry) => entry.people > 0);
+
     res.json({
       ...summarise(records, visible),
+      matrix,
       // A restricted account's dashboard covers only its own registers and says
       // so, because a partial view reads as the whole department's position.
       restricted: visible.length !== ALL_REGISTER_IDS.length,
@@ -521,7 +536,7 @@ async function main() {
 
   const app = await createApp({ store });
   app.listen(PORT, () => {
-    console.log(`Engineering Planning Tracker on http://localhost:${PORT} (storage: ${store.kind})`);
+    console.log(`Maintenance Planning Tracker on http://localhost:${PORT} (storage: ${store.kind})`);
     if (!process.env.SESSION_SECRET) {
       console.warn('SESSION_SECRET is not set — sessions will not survive a restart.');
     }

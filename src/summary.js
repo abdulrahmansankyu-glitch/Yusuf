@@ -9,6 +9,7 @@ import { daysUntil, toDateOnly, todayIso } from './dates.js';
 import {
   CLOSED_STATUSES,
   DUE_SOON_DAYS,
+  PRIORITIES,
   PRIORITY_RANK,
   deriveRecord,
   dueState,
@@ -154,7 +155,79 @@ export function summarise(records, registerIds, today = todayIso()) {
     people: peopleTotals(registers),
     registers,
     attention,
+    charts: {
+      dueBuckets: dueBuckets(items),
+      byPriority: byPriority(items),
+      byOwner: byOwner(items),
+    },
   };
+}
+
+/** How many weeks ahead the due-date chart looks. */
+const HORIZON_WEEKS = 12;
+
+/**
+ * Open work laid out over the coming weeks.
+ *
+ * Overdue leads as its own bucket rather than being folded into week one: it is
+ * a different question — work that has already slipped, not work that is coming.
+ * Everything past the horizon and everything with no date are their own buckets
+ * too, because dropping them would make the bars add up to less than the total
+ * with nothing on the page saying so.
+ */
+function dueBuckets(items) {
+  const open = items.filter((i) => !CLOSED_STATUSES.has(i.derived.status) && i.kind !== 'people');
+  const weeks = Array.from({ length: HORIZON_WEEKS }, (_, i) => ({
+    key: `w${i + 1}`,
+    label: i === 0 ? 'This week' : `+${i + 1}w`,
+    count: 0,
+  }));
+  const buckets = { overdue: 0, later: 0, undated: 0 };
+
+  for (const item of open) {
+    if (item.state === 'undated') buckets.undated += 1;
+    else if (item.daysToDue === null) buckets.undated += 1;
+    else if (item.daysToDue < 0) buckets.overdue += 1;
+    else {
+      const week = Math.floor(item.daysToDue / 7);
+      if (week < HORIZON_WEEKS) weeks[week].count += 1;
+      else buckets.later += 1;
+    }
+  }
+
+  return { overdue: buckets.overdue, weeks, later: buckets.later, undated: buckets.undated };
+}
+
+function byPriority(items) {
+  const open = items.filter((i) => !CLOSED_STATUSES.has(i.derived.status) && i.kind !== 'people');
+  return PRIORITIES.map(({ value }) => ({
+    priority: value,
+    total: open.filter((i) => i.derived.priority === value).length,
+    overdue: open.filter((i) => i.derived.priority === value && i.state === 'overdue').length,
+  })).filter((row) => row.total > 0);
+}
+
+/** How many open jobs each name is carrying, busiest first. */
+const OWNER_LIMIT = 12;
+
+function byOwner(items) {
+  const counts = new Map();
+  for (const item of items) {
+    if (item.kind === 'people') continue;
+    if (CLOSED_STATUSES.has(item.derived.status)) continue;
+    // Whichever column this register uses to say who has it. A rental sheet
+    // names a supplier, not a person, and that is still the answer to "who is
+    // this waiting on".
+    const owner = item.derived.actionBy || item.derived.supplier || item.derived.initiator;
+    if (!owner) continue;
+    const entry = counts.get(owner) ?? { owner, total: 0, overdue: 0 };
+    entry.total += 1;
+    if (item.state === 'overdue') entry.overdue += 1;
+    counts.set(owner, entry);
+  }
+  return [...counts.values()]
+    .sort((a, b) => b.overdue - a.overdue || b.total - a.total)
+    .slice(0, OWNER_LIMIT);
 }
 
 function peopleTotals(registers) {
