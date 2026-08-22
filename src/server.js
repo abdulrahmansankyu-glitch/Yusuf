@@ -6,9 +6,10 @@
  * source of truth for the workbook's shape.
  */
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 import express from 'express';
 import multer from 'multer';
@@ -63,7 +64,38 @@ export async function createApp({ store }) {
    */
   catchAsync(app);
   app.use(express.json({ limit: '10mb' }));
-  app.use(express.static(path.join(here, '..', 'public')));
+  const publicDir = path.join(here, '..', 'public');
+
+  /**
+   * The browser app, stamped with the version it was built from.
+   *
+   * `index.html` links `/app.js` and `/styles.css` by bare path, so a browser
+   * holding yesterday's copy kept showing yesterday's app after a deploy — the
+   * team saw an unchanged page and reasonably concluded nothing had shipped.
+   * The stamp changes whenever either file changes, which makes the URL change,
+   * which is the only thing a cache reliably respects.
+   */
+  const assetStamp = await stampAssets(publicDir);
+  const shell = (await fs.readFile(path.join(publicDir, 'index.html'), 'utf8'))
+    .replace('/styles.css', `/styles.css?v=${assetStamp}`)
+    .replace('/app.js', `/app.js?v=${assetStamp}`);
+
+  app.use(
+    express.static(publicDir, {
+      // Without this, static serves the raw index.html for `/` before the route
+      // below ever runs — and the raw file is the unstamped one, which is the
+      // whole problem this is here to solve.
+      index: false,
+      // A stamped asset can be cached hard: a new deploy asks for a new URL.
+      maxAge: '1y',
+      immutable: true,
+      // `index.html` itself must never be cached, or the stamp inside it is the
+      // stale thing and nothing else can recover.
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+      },
+    }),
+  );
 
   /* ---------------------------------------------------------------- *
    * Who is asking
@@ -444,7 +476,8 @@ export async function createApp({ store }) {
 
   /** The single-page app answers anything that is not an API call. */
   app.get(/^(?!\/api\/).*/, (req, res) => {
-    res.sendFile(path.join(here, '..', 'public', 'index.html'));
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('html').send(shell);
   });
 
   app.use((error, req, res, next) => {
@@ -474,6 +507,20 @@ function catchAsync(app) {
         ),
       );
   }
+}
+
+/**
+ * A short hash of the browser assets, used as their cache-busting version.
+ *
+ * Content rather than a deploy timestamp, so a redeploy that changes nothing
+ * does not force everybody to re-download, and a change to either file does.
+ */
+export async function stampAssets(publicDir) {
+  const hash = createHash('sha256');
+  for (const name of ['app.js', 'styles.css']) {
+    hash.update(await fs.readFile(path.join(publicDir, name)));
+  }
+  return hash.digest('hex').slice(0, 10);
 }
 
 function sendWorkbook(res, filename, buffer) {
