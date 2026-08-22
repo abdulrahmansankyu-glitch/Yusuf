@@ -580,6 +580,165 @@ td .cell-short { display: block; max-width: 220px; }
 .donut-key-row b { font-variant-numeric: tabular-nums; color: var(--ink); }
 .donut-key-pct { font-variant-numeric: tabular-nums; color: var(--ink-faint); min-width: 34px; text-align: right; }
 
+/* ---------------------------------------------------------------- 3D view */
+
+.scene {
+  --rx: 58deg;
+  --rz: -32deg;
+  perspective: 1400px;
+  perspective-origin: 50% 42%;
+  height: 500px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--radius);
+  /* A soft ground-to-sky wash, so the columns sit in something rather than
+     floating on a white sheet. */
+  background: radial-gradient(120% 90% at 50% 8%, #f7fafd 0%, #eaf0f6 55%, #dde5ee 100%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.scene:active { cursor: grabbing; }
+
+/* Nudged down: the columns rise from the floor, so a scene centred on the floor
+   sits high in its box with dead space beneath it. */
+.floor-wrap {
+  transform-style: preserve-3d;
+  transform: translateY(44px);
+}
+
+.stage {
+  position: relative;
+  transform-style: preserve-3d;
+  transform: rotateX(var(--rx)) rotateZ(var(--rz));
+}
+/* The spin is the camera turning, not the scene wobbling — one axis only. */
+.scene.spinning .stage { animation: plant-spin 44s linear infinite; }
+@keyframes plant-spin {
+  from { transform: rotateX(var(--rx)) rotateZ(var(--rz)); }
+  to { transform: rotateX(var(--rx)) rotateZ(calc(var(--rz) + 360deg)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene.spinning .stage { animation: none; }
+}
+
+.floor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 6px;
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(to right, rgba(18, 80, 126, 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(18, 80, 126, 0.09) 1px, transparent 1px);
+  box-shadow: 0 0 0 1px rgba(18, 80, 126, 0.14), 0 30px 50px rgba(16, 32, 48, 0.18);
+}
+
+/*
+ * A box standing on the floor plane.
+ *
+ * The container is a point at the cell's centre; each face is placed relative to
+ * it. Every wall is oriented so its own vertical axis points along world +Z —
+ * `rotateX(90deg)` for the two facing along Y, and `rotateZ(90deg) rotateX(90deg)`
+ * for the two facing along X. Getting that sign wrong is what sends the columns
+ * down through the floor instead of up out of it.
+ */
+.column3d {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  cursor: pointer;
+}
+.column3d .face {
+  position: absolute;
+  display: block;
+  background: var(--tone);
+}
+.column3d .front,
+.column3d .back,
+.column3d .left,
+.column3d .right {
+  width: var(--w);
+  height: var(--h);
+  margin-left: calc(var(--w) / -2);
+  margin-top: calc(var(--h) / -2);
+}
+.column3d .front {
+  transform: translate3d(0, calc(var(--w) / 2), calc(var(--h) / 2)) rotateX(90deg);
+}
+.column3d .back {
+  transform: translate3d(0, calc(var(--w) / -2), calc(var(--h) / 2)) rotateX(90deg);
+  filter: brightness(0.8);
+}
+.column3d .right {
+  transform: translate3d(calc(var(--w) / 2), 0, calc(var(--h) / 2)) rotateZ(90deg) rotateX(90deg);
+  filter: brightness(0.9);
+}
+.column3d .left {
+  transform: translate3d(calc(var(--w) / -2), 0, calc(var(--h) / 2)) rotateZ(90deg) rotateX(90deg);
+  filter: brightness(0.86);
+}
+.column3d .top {
+  width: var(--w);
+  height: var(--w);
+  margin-left: calc(var(--w) / -2);
+  margin-top: calc(var(--w) / -2);
+  transform: translateZ(var(--h));
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  font-weight: 680;
+  color: #fff;
+  filter: brightness(1.14);
+  border-radius: 3px;
+}
+.column3d .top-text {
+  display: block;
+  transform: rotateZ(calc(-1 * var(--rz)));
+}
+
+/* One colour per column, lit differently per face — which is what makes it read
+   as a solid rather than as five flat stickers. */
+.column3d.t-overdue { --tone: var(--overdue); }
+.column3d.t-due-soon { --tone: var(--due-soon); }
+.column3d.t-scheduled { --tone: var(--scheduled); }
+.column3d.t-undated { --tone: #c3cad3; }
+.column3d.t-undated .top { color: var(--ink-soft); }
+
+/* Billboarded: counter-rotating by the camera's own angles keeps the label
+   facing the reader instead of lying flat on the roof. */
+.column3d .pin {
+  position: absolute;
+  transform: translate3d(0, 0, calc(var(--h) + 22px)) rotateZ(calc(-1 * var(--rz))) rotateX(calc(-1 * var(--rx)));
+  transform-style: preserve-3d;
+}
+.column3d .pin-text {
+  display: block;
+  transform: translate(-50%, -50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--ink);
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(16, 32, 48, 0.16);
+}
+
+.scene-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 10px;
+}
+
 /* ---------------------------------------------------------------- Checklist */
 
 .checklist {
@@ -716,6 +875,7 @@ td .cell-short { display: block; max-width: 220px; }
   .donut-grid { grid-template-columns: 1fr; }
   .donut-wrap { gap: 14px; }
   .donut { width: 120px; height: 120px; }
+  .scene { height: 340px; perspective: 900px; }
 
   .drawer { width: 100%; }
 }

@@ -348,6 +348,7 @@ function topbar() {
 const DASHBOARD_VIEWS = [
   { id: 'overview', label: 'Overview', hint: 'What is late, and what changed' },
   { id: 'charts', label: 'Charts', hint: 'The shape of the work' },
+  { id: 'plant', label: '3D view', hint: 'The whole department as one landscape' },
   { id: 'people', label: 'People', hint: 'Who is carrying it, and what is missing' },
 ];
 
@@ -387,7 +388,13 @@ function dashboard() {
         ),
       ),
     ),
-    view.id === 'overview' ? overviewView(summary) : view.id === 'charts' ? chartsView(summary) : peopleView(summary),
+    view.id === 'overview'
+      ? overviewView(summary)
+      : view.id === 'charts'
+        ? chartsView(summary)
+        : view.id === 'plant'
+          ? plantView(summary)
+          : peopleView(summary),
   );
 }
 
@@ -789,6 +796,178 @@ function chartsView(summary) {
             ]),
           )
         : h('div', { class: 'empty' }, 'No open work.'),
+    ),
+  );
+}
+
+/* ---------------------------------------------------------------- 3D view */
+
+/**
+ * The department as a landscape: one column per register, its height the work
+ * still open on it and its colour the worst state anything on it is in.
+ *
+ * Built from CSS 3D transforms rather than a 3D library. The app has no build
+ * step and runs on a plant network, so half a megabyte of WebGL fetched from a
+ * CDN would be a real cost for a decorative gain — and this is genuine
+ * perspective, not a drawing of it: the columns really are boxes, and dragging
+ * really rotates the camera around them.
+ */
+const PLANT = {
+  /** Floor cell size, and how much of it the column occupies. */
+  cell: 96,
+  footprint: 56,
+  /** The tallest a column gets, whatever the busiest register holds. */
+  /* Headroom matters more than drama: at a shallow tilt a column takes far more
+     screen height than it does looking down, and a clipped roof looks broken. */
+  maxHeight: 172,
+  columns: 4,
+};
+
+/*
+ * The camera. `rx` is positive on purpose: the stage's +Z is the column's up,
+ * and only a positive X rotation maps it to screen-up. Negative tilts the world
+ * the other way and the columns grow down through the floor.
+ */
+const plantCamera = { rx: 58, rz: -32, spin: true };
+
+function plantView(summary) {
+  // Tallest at the back. Placed in register order the tall columns land wherever
+  // they happen to fall, hiding the short ones behind them and stacking their
+  // labels on top of each other; sorted, the landscape steps down towards the
+  // reader and every label has clear air above it.
+  const registers = [...summary.registers]
+    .filter((r) => r.kind === 'jobs')
+    .sort((a, b) => b.open - a.open || b.total - a.total);
+  const busiest = Math.max(1, ...registers.map((r) => r.open));
+
+  const stage = h('div', { class: 'stage' });
+  const scene = h('div', { class: 'scene' }, h('div', { class: 'floor-wrap' }, stage));
+
+  const rows = Math.ceil(registers.length / PLANT.columns);
+  const width = PLANT.columns * PLANT.cell;
+  const depth = rows * PLANT.cell;
+
+  // The floor, and the grid the columns stand on.
+  const floor = h('div', {
+    class: 'floor',
+    style: `width:${width}px;height:${depth}px;background-size:${PLANT.cell}px ${PLANT.cell}px`,
+  });
+  stage.append(floor);
+
+  registers.forEach((register, i) => {
+    const column = i % PLANT.columns;
+    const row = Math.floor(i / PLANT.columns);
+    const height = register.open ? Math.max(14, (register.open / busiest) * PLANT.maxHeight) : 6;
+    // Worst state wins: a register with anything overdue on it reads red from
+    // across the room, which is the only reason to look at this from a distance.
+    const tone = register.overdue ? 'overdue' : register.dueSoon ? 'due-soon' : register.open ? 'scheduled' : 'undated';
+
+    const x = column * PLANT.cell + (PLANT.cell - PLANT.footprint) / 2 - width / 2;
+    const y = row * PLANT.cell + (PLANT.cell - PLANT.footprint) / 2 - depth / 2;
+
+    const box = h(
+      'div',
+      {
+        class: `column3d t-${tone}`,
+        style: `--w:${PLANT.footprint}px;--h:${height}px;transform:translate3d(${x}px,${y}px,0)`,
+        title: `${register.name}: ${register.open} open, ${register.overdue} overdue, ${register.closed} closed`,
+        onclick: () => go({ name: 'register', id: register.id }),
+      },
+      // Four walls and a lid. The underside is never seen — the camera is
+      // clamped above the floor — so it is not built.
+      h('span', { class: 'face front' }),
+      h('span', { class: 'face back' }),
+      h('span', { class: 'face left' }),
+      h('span', { class: 'face right' }),
+      // The count sits on the roof, counter-rotated about Z only so it reads
+      // level with the page instead of lying along the column's own axis.
+      h('span', { class: 'face top' }, h('span', { class: 'top-text' }, register.open || '')),
+      // Billboarded: counter-rotating by the camera angles keeps the label
+      // facing the reader instead of lying flat on the column.
+      h('span', { class: 'pin' }, h('span', { class: 'pin-text' }, register.short)),
+    );
+    stage.append(box);
+  });
+
+  function applyCamera() {
+    scene.style.setProperty('--rx', `${plantCamera.rx}deg`);
+    scene.style.setProperty('--rz', `${plantCamera.rz}deg`);
+    scene.classList.toggle('spinning', plantCamera.spin);
+  }
+  applyCamera();
+
+  /* Drag to look around. Rotation about X is clamped so the camera never drops
+     below the floor or tips over the top, where the scene reads as nonsense. */
+  let dragging = null;
+  scene.addEventListener('pointerdown', (event) => {
+    dragging = { x: event.clientX, y: event.clientY, rx: plantCamera.rx, rz: plantCamera.rz };
+    plantCamera.spin = false;
+    scene.setPointerCapture(event.pointerId);
+    applyCamera();
+  });
+  scene.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    plantCamera.rz = dragging.rz + (event.clientX - dragging.x) * 0.4;
+    // Clamped: below about 12° the floor is edge-on and the scene is unreadable;
+    // above 85° it is a plan view with no height in it at all.
+    plantCamera.rx = Math.min(85, Math.max(12, dragging.rx + (event.clientY - dragging.y) * 0.3));
+    applyCamera();
+  });
+  const stop = () => {
+    dragging = null;
+  };
+  scene.addEventListener('pointerup', stop);
+  scene.addEventListener('pointercancel', stop);
+
+  const legendSeries = [
+    { key: 'overdue', label: 'Something overdue' },
+    { key: 'due-soon', label: 'Due within the month' },
+    { key: 'scheduled', label: 'Open, on track' },
+    { key: 'undated', label: 'Nothing open' },
+  ];
+
+  return h(
+    'div',
+    {},
+    card(
+      'The department, as a landscape',
+      `${registers.length} registers · tallest is ${busiest} open`,
+      h(
+        'div',
+        {},
+        scene,
+        h(
+          'div',
+          { class: 'scene-controls' },
+          h(
+            'button',
+            {
+              class: 'small',
+              onclick: () => {
+                plantCamera.spin = !plantCamera.spin;
+                applyCamera();
+              },
+            },
+            'Spin on / off',
+          ),
+          h(
+            'button',
+            {
+              class: 'small',
+              onclick: () => {
+                plantCamera.rx = 58;
+                plantCamera.rz = -32;
+                plantCamera.spin = true;
+                applyCamera();
+              },
+            },
+            'Reset view',
+          ),
+          h('span', { class: 'who' }, 'Drag to look around · click a column to open that register'),
+        ),
+        legend(legendSeries),
+        h('div', { class: 'field-note' }, 'Height is how much is still open on that register. Colour is the worst state anything on it is in.'),
+      ),
     ),
   );
 }
