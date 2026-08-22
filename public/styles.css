@@ -17,6 +17,18 @@
   --brand: #12507e;
   --brand-soft: #e8f0f7;
 
+  /*
+   * Priority is an ordered scale, so it gets one hue getting lighter as it gets
+   * less urgent — not the status colours. Those are reserved: green means
+   * "closed" in the ring beside this one, and using it again for "low priority"
+   * put one colour with two meanings on a single page.
+   */
+  --pri-1: #0b3a5e;
+  --pri-2: #12507e;
+  --pri-3: #3d7ab5;
+  --pri-4: #86aed6;
+  --pri-5: #c2d6ea;
+
   --overdue: #c0392b;
   --due-soon: #ca8a04;
   --scheduled: #2b6cb0;
@@ -505,6 +517,69 @@ td .cell-short { display: block; max-width: 220px; }
   white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------- Donut */
+
+.donut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 14px;
+}
+.donut-grid > .card { margin-top: 14px; }
+
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.donut {
+  width: 150px;
+  height: 150px;
+  flex: 0 0 auto;
+  /* Start at twelve o'clock. A ring that begins at three reads as if the first
+     slice has already been cut. */
+  transform: rotate(-90deg);
+}
+.donut-total {
+  text-anchor: middle;
+  font-size: 30px;
+  font-weight: 680;
+  fill: var(--ink);
+  /* Undo the ring's rotation so the number is not on its side. */
+  transform: rotate(90deg);
+  transform-origin: center;
+  transform-box: view-box;
+}
+.donut-label {
+  text-anchor: middle;
+  font-size: 12px;
+  fill: var(--ink-faint);
+  transform: rotate(90deg);
+  transform-origin: center;
+  transform-box: view-box;
+}
+
+/* Capped, not stretched: on a full-width card an unbounded key pushed the
+   counts to the far edge, a hand-span away from the labels they belong to. */
+.donut-key {
+  flex: 0 1 340px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.donut-key-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+.donut-key-row i { width: 10px; height: 10px; border-radius: 2px; }
+.donut-key-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.donut-key-row b { font-variant-numeric: tabular-nums; color: var(--ink); }
+.donut-key-pct { font-variant-numeric: tabular-nums; color: var(--ink-faint); min-width: 34px; text-align: right; }
+
 /* ---------------------------------------------------------------- Checklist */
 
 .checklist {
@@ -638,6 +713,9 @@ td .cell-short { display: block; max-width: 220px; }
   .columns { height: 150px; gap: 3px; }
   .column-label { font-size: 9px; }
   .checklist { grid-template-columns: 1fr 1fr; max-height: 180px; }
+  .donut-grid { grid-template-columns: 1fr; }
+  .donut-wrap { gap: 14px; }
+  .donut { width: 120px; height: 120px; }
 
   .drawer { width: 100%; }
 }
