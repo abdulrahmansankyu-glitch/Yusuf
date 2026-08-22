@@ -25,6 +25,7 @@ import { detectHeader, readSheet, readWorkbook, suggestRegister, writeWorkbook }
 import { nextNumber } from '../src/autonumber.js';
 import { hashPassword, isLastAdmin, signToken, verifyPassword, verifyToken, mayUseRegister } from '../src/auth.js';
 import { connectionSettings } from '../src/store.js';
+import { stampAssets } from '../src/server.js';
 import { summarise } from '../src/summary.js';
 
 const iso = (v) => toDateOnly(v);
@@ -615,4 +616,36 @@ test('people sheets never reach the job charts', () => {
   assert.equal(totals.total, 1);
   assert.equal(charts.dueBuckets.overdue, 1);
   assert.equal(charts.byOwner.length, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * The browser app is served with a version on it
+ * ------------------------------------------------------------------ */
+
+test('the asset stamp follows the content, so a deploy cannot be cached away', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const nodePath = await import('node:path');
+
+  const dir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'assets-'));
+  const write = (name, body) => fs.writeFile(nodePath.join(dir, name), body);
+  await write('app.js', 'console.log(1)');
+  await write('styles.css', 'body{}');
+
+  const first = await stampAssets(dir);
+  assert.match(first, /^[a-f0-9]{10}$/);
+
+  // Same content, same stamp — a redeploy that changes nothing must not force
+  // everybody to download the app again.
+  assert.equal(await stampAssets(dir), first);
+
+  // A change to either file changes it, which is what makes the URL change.
+  await write('app.js', 'console.log(2)');
+  assert.notEqual(await stampAssets(dir), first);
+
+  const cssOnly = await stampAssets(dir);
+  await write('styles.css', 'body{color:red}');
+  assert.notEqual(await stampAssets(dir), cssOnly, 'a stylesheet-only change still busts the cache');
+
+  await fs.rm(dir, { recursive: true, force: true });
 });
