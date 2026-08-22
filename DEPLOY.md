@@ -93,17 +93,24 @@ wait shows Render's own "service waking up" page, served before this app is
 running, so it cannot be styled or skipped from here.
 
 [`.github/workflows/keep-awake.yml`](.github/workflows/keep-awake.yml) pings
-`/api/health` every five minutes, Sunday to Thursday, 05:00–17:55 local, so
-nobody meets that screen during the working day. Enable it by adding one
-repository secret:
+`/api/health` every five minutes, every day, **06:00–22:55 local**, so nobody
+meets that screen during the hours anybody is using it. It needs no setup — the
+URL is in the workflow file, because it is printed on the service's own page and
+there is nothing secret about it. Set a `TRACKER_URL` repository secret only if
+you want to override it without editing the file.
 
-```
-TRACKER_URL = https://engineering-planning-tracker.onrender.com
-```
+**It stops overnight deliberately, and cannot cover the whole day.** The free
+tier allows 750 instance-hours a month per workspace. The 17-hour window is
+about 517 of them, leaving roughly 230 for the service's own real traffic.
+Awake around the clock is about 730 — which would spend the entire allowance and
+**suspend the service until the first of the next month**. A fifty-second wait at
+six in the morning is a far better outcome than a dead URL for the last week of
+every month, so the window is the practical limit without paying.
 
-It stops outside those hours deliberately: the free tier allows 750
-instance-hours a month per workspace, awake around the clock is about 730 of
-them, and the working-hours window is roughly 280.
+Between 23:00 and 06:00 the first visitor still meets Render's waking screen.
+That page is served by Render before this app is running, so it cannot be styled
+or skipped from here — the only complete fix is a paid instance, which never
+sleeps.
 
 **Render's own free database is deleted after 30 days.** This is the one that
 will bite, and it is why the blueprint points you at Neon instead. If you did
