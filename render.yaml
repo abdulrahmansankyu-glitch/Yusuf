@@ -1,23 +1,34 @@
 # One-click deploy: https://dashboard.render.com/blueprints → New Blueprint Instance
 #
-# One web service and one Postgres. The app is plain JavaScript on both sides, so
-# there is no build step — a deploy is an install and a start, and any failure
-# names the command that actually broke rather than a layer in an image.
+# One web service. The app is plain JavaScript on both sides, so there is no
+# build step — a deploy is an install and a start, and any failure names the
+# command that actually broke rather than a layer in an image.
 #
-# Free tier, with two limits worth knowing before the team relies on it:
+# ---------------------------------------------------------------------------
+# The database is NOT created here. You paste a connection string.
 #
-#   * Services sleep after 15 minutes idle and take about 50 seconds to wake.
-#     `.github/workflows/keep-awake.yml` covers the working day; see DEPLOY.md.
-#   * THE FREE DATABASE IS DELETED AFTER 30 DAYS. Fine for trying the system out.
-#     Before it holds work you cannot lose, move to a paid database or to Neon's
-#     free tier, which persists — DEPLOY.md has the steps.
-
-databases:
-  - name: planning-db
-    databaseName: planning
-    user: planning
-    plan: free
-    region: frankfurt # closest Render region to Saudi Arabia
+# Render allows one free Postgres per account, so a blueprint that creates its
+# own fails outright for anybody who already has one:
+#
+#   Create database planning-db
+#     ✗ cannot have more than one active free tier database
+#
+# and the web service is cancelled behind it. Asking for the connection string
+# instead works whether the database is new or already exists, on Render or off
+# it, free or paid.
+#
+# Any Postgres will do. The tables are created on boot inside their own
+# `planning` schema, so sharing a database with another application is safe:
+# a migration tool pointed at `public` cannot reach them.
+#
+#   * Neon (neon.tech) — free, and it PERSISTS. The best answer, because
+#     Render's own free database is deleted after 30 days.
+#   * An existing Render Postgres — use its Internal Database URL.
+# ---------------------------------------------------------------------------
+#
+# One more free-tier limit worth knowing: services sleep after 15 minutes idle
+# and take about 50 seconds to wake. `.github/workflows/keep-awake.yml` covers
+# the working day; see DEPLOY.md.
 
 services:
   - type: web
@@ -35,13 +46,23 @@ services:
     startCommand: npm start
 
     envVars:
-      # Render's internal connection string. The tables are created on boot, in
-      # their own schema, so nothing else sharing this database can be reached by
-      # a migration tool pointed at `public`.
+      # Required. The Postgres to use — see the note at the top of this file.
+      # Render asks for it when you create or sync the blueprint; you can also
+      # set it later under the service's Environment tab.
+      #
+      #   postgres://user:password@host/dbname
+      #
+      # Without it the app falls back to a JSON file inside the container, which
+      # this host destroys on every deploy and every wake from sleep. `/api/health`
+      # reports which one is in use, and that is the thing to check first.
       - key: DATABASE_URL
-        fromDatabase:
-          name: planning-db
-          property: connectionString
+        sync: false
+
+      # Managed Postgres presents a certificate this app does not chain-verify.
+      # Neon and Render both need this; a server with TLS switched off entirely
+      # (a local container) needs `disable` instead.
+      - key: DATABASE_SSL
+        value: no-verify
 
       - key: NODE_VERSION
         value: "22"
