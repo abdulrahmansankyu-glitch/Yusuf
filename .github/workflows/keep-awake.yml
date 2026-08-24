@@ -1,75 +1,125 @@
-# Keep the tracker awake during the working day.
+# Keep the tracker awake through the day.
 #
-# A free Render service sleeps after 15 minutes without traffic, and the next
-# person to open it waits about 50 seconds looking at Render's own "service
-# waking up" screen — served before this app is running, so it cannot be styled
-# or skipped from here. Any inbound request resets the idle timer, so a small
-# ping keeps the service up and nobody on the plant ever meets that screen.
+# A free Render service sleeps after fifteen minutes without traffic, and the
+# next person to open it waits about fifty seconds looking at Render's own
+# "service waking up" screen. That page is served by Render before the app is
+# running, so it cannot be styled or skipped from the app — the only thing that
+# helps is the service not being asleep.
 #
-# It deliberately does NOT run around the clock. Render's free tier allows 750
-# instance-hours a month per workspace; awake 24/7 is about 730 of them, which
-# would spend the whole allowance and starve anything else in the same
-# workspace. Sunday to Thursday, 05:00-18:00 local, is roughly 280 hours — the
-# service still sleeps overnight and at the weekend, when nobody is looking.
+# WHY THIS RUNS IN A LOOP RATHER THAN ON A FIVE-MINUTE CRON
 #
-# The URL lives in `env` below, not in a repository secret. It is printed on
-# the service's own page and handed to anybody who uses the app — there is
-# nothing to keep secret about it, and requiring a secret meant this workflow
-# shipped switched off and stayed switched off. Set a `TRACKER_URL` repository
-# secret only if you want to override it without editing this file.
+# It used to ask for `*/5`. GitHub does not honour that. Scheduled workflows are
+# best-effort and heavily deprioritised, and in this repository the runs landed
+# 20 to 60 minutes apart:
+#
+#   03:47  04:30  05:20  05:57  06:57      (UTC, one morning)
+#
+# Against a fifteen-minute sleep timer the service slept in nearly every gap,
+# and the ping's own response time showed it — 23 seconds, which is a wake, not
+# a healthy answer.
+#
+# So the schedule is hourly, and each run stays alive pinging every five minutes
+# until the next one takes over. GitHub delaying the hourly trigger no longer
+# opens a hole, because the previous run is still going. Actions minutes are
+# unlimited on a public repository, so the long job costs nothing.
+#
+# The URL is in `env` below rather than a repository secret: it is printed on the
+# service's own page and handed to everybody who uses the app, and requiring a
+# secret meant this shipped switched off. A `TRACKER_URL` secret still overrides
+# it.
 #
 # This is a workaround for a free plan, not a fix. A paid Render instance never
-# sleeps, and this file can be deleted the day you move to one.
+# sleeps, and this file can be deleted the day you move to one. A purpose-built
+# uptime pinger is the other honest answer, and is more reliable than this.
 
 name: Keep awake
 
 on:
   schedule:
-    # Every 5 minutes, 03:00-19:55 UTC, every day.
+    # Hourly, 03:00-19:00 UTC. Saudi Arabia is UTC+3 and does not observe
+    # daylight saving, so that is 06:00-22:00 local — the working day with the
+    # evening on the end of it.
     #
-    # GitHub runs cron in UTC with no local-time option, so the plant's hours are
-    # converted by hand: Saudi Arabia is UTC+3 and does not observe daylight
-    # saving, making this 06:00-22:55 local — the working day with the evening on
-    # the end of it, because the app gets opened after hours too.
-    #
-    # That window is about 500 instance-hours a month against the free tier's
-    # 750, which leaves room for the service's own real traffic. Widening it to
-    # the full 24 hours would spend the entire allowance and suspend the service
-    # before month end, so this is the practical limit without paying.
-    #
-    # Five minutes rather than ten because GitHub's scheduled runs are best
-    # effort and are often late under load — at a ten minute interval one
-    # delayed run is enough to let the service sleep.
-    - cron: '*/5 3-19 * * *'
+    # It stops overnight deliberately. The free tier allows 750 instance-hours a
+    # month per workspace; this window is about 517 of them and leaves room for
+    # the service's own real traffic. Around the clock is about 730, which would
+    # spend the whole allowance and suspend the service until the first of the
+    # next month — a dead URL for the last week of every month is far worse than
+    # a wait at six in the morning.
+    - cron: '0 3-19 * * *'
   workflow_dispatch:
 
 concurrency:
+  # A new run takes over from the one still looping, so the pings stay continuous
+  # across the handover instead of pausing for it.
   group: keep-awake
   cancel-in-progress: true
 
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Longer than the hour between triggers, so a late trigger finds this one
+    # still working rather than finding nothing running at all.
+    timeout-minutes: 75
+
     steps:
-      - name: Ping the health endpoint
+      - name: Ping the health endpoint every five minutes
         env:
           # The live service. A repository secret of the same name overrides it.
           TRACKER_URL: ${{ secrets.TRACKER_URL || 'https://engineering-tracker.onrender.com' }}
+          PINGS: '14'
+          INTERVAL: '300'
         # `/api/health` is the cheapest route that touches the app: no database
         # query and no session. `--max-time 90` covers the case where this ping
         # is itself the request that wakes a sleeping instance.
         #
-        # A failed ping warns rather than fails the job. This runs 150 times a
-        # week, and a red cross every time Render blips would train everybody to
-        # ignore the Actions tab — including when the test job goes red.
+        # Nothing here fails the job. It runs all day, and a red cross every time
+        # Render blips would train everybody to ignore the Actions tab —
+        # including when the test job goes red. A ping that answers anything
+        # other than 200 is a warning, and the loop carries on.
         run: |
           if [ -z "$TRACKER_URL" ]; then
             echo "::warning::TRACKER_URL is not set — nothing to ping."
             exit 0
           fi
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$TRACKER_URL/api/health" 2>&1 | tail -n1)
-          echo "$TRACKER_URL/api/health -> ${code:-no answer}"
-          if [ "$code" != "200" ]; then
-            echo "::warning::Health check answered ${code:-nothing}."
+
+          woke=0
+          failed=0
+          for i in $(seq 1 "$PINGS"); do
+            start=$(date +%s)
+            # No `|| echo 000` fallback: curl already writes 000 through -w when
+            # it cannot connect, and the two together printed "000000" — a
+            # status code that does not exist. `|| true` keeps `set -e` from
+            # ending the run on a blip instead.
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$TRACKER_URL/api/health" 2>/dev/null) || true
+            took=$(( $(date +%s) - start ))
+
+            # A healthy instance answers in well under a second. Several seconds
+            # means this request was the one that woke it — which is the thing
+            # this workflow exists to prevent, so it is worth seeing in the log.
+            note=''
+            if [ "$took" -ge 5 ]; then
+              note=' (was asleep — this ping woke it)'
+              woke=$((woke + 1))
+            fi
+            echo "$(date -u +%H:%M:%S)  ping $i/$PINGS -> ${code:-no answer} in ${took}s$note"
+
+            if [ "$code" != "200" ]; then
+              echo "::warning::Ping $i answered ${code:-nothing}."
+              failed=$((failed + 1))
+            fi
+
+            [ "$i" -lt "$PINGS" ] && sleep "$INTERVAL"
+          done
+
+          # Report what actually happened. Saying "stayed awake" after a run in
+          # which every ping failed would be worse than saying nothing.
+          if [ "$failed" -eq "$PINGS" ]; then
+            echo "::warning::Not one ping reached $TRACKER_URL — check the URL and the service."
+          elif [ "$failed" -gt 0 ]; then
+            echo "::warning::$failed of $PINGS pings did not answer 200."
+          elif [ "$woke" -gt 0 ]; then
+            echo "::warning::The service was found asleep $woke time(s) this run."
+          else
+            echo "Stayed awake for the whole run."
           fi

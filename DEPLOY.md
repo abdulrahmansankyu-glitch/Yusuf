@@ -93,11 +93,30 @@ wait shows Render's own "service waking up" page, served before this app is
 running, so it cannot be styled or skipped from here.
 
 [`.github/workflows/keep-awake.yml`](.github/workflows/keep-awake.yml) pings
-`/api/health` every five minutes, every day, **06:00–22:55 local**, so nobody
-meets that screen during the hours anybody is using it. It needs no setup — the
-URL is in the workflow file, because it is printed on the service's own page and
-there is nothing secret about it. Set a `TRACKER_URL` repository secret only if
-you want to override it without editing the file.
+`/api/health` every five minutes, every day, **06:00–22:00 local**. It needs no
+setup — the URL is in the workflow file, because it is printed on the service's
+own page and there is nothing secret about it. Set a `TRACKER_URL` repository
+secret only if you want to override it without editing the file.
+
+**It loops rather than relying on a five-minute cron, and that distinction is
+the whole thing.** GitHub does not honour a `*/5` schedule: scheduled workflows
+are best-effort and heavily deprioritised, and in this repository the runs landed
+20 to 60 minutes apart —
+
+```
+03:47  04:30  05:20  05:57  06:57      (UTC, one morning)
+```
+
+— so against a fifteen-minute sleep timer the service slept in nearly every gap.
+The ping's own response time gave it away: 23 seconds, which is a wake, not a
+healthy answer. The trigger is now hourly and each run stays alive pinging for
+about 65 minutes, so a late trigger finds the previous run still working.
+
+**If it still is not enough, use a purpose-built uptime pinger.** A free tier at
+UptimeRobot, cron-job.org or Better Stack will hit `/api/health` every one to
+five minutes far more reliably than GitHub's scheduler, and takes two minutes to
+set up: point it at `https://<your-service>.onrender.com/api/health` and expect
+200. That is the free answer. The paid Render instance is the complete one.
 
 **It stops overnight deliberately, and cannot cover the whole day.** The free
 tier allows 750 instance-hours a month per workspace. The 17-hour window is
