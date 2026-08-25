@@ -211,6 +211,38 @@ export function suggestRegister(worksheet) {
   let best = null;
 
   for (const register of REGISTERS) {
+    // The wide history layout is not a column-per-field table, so the ordinary
+    // matcher scores it on `Date` and `Remarks` alone and loses to registers
+    // that merely also have a Remarks column. Its own detector decides, and the
+    // number of unit columns is what it is confident about.
+    if (register.history) {
+      // The flat table this app exports also opens with a Date and then several
+      // named columns, so it satisfies the wide detector too. Whichever shape
+      // the sheet is in, the one that names Unit and What happened as columns is
+      // the flat one, and it wins — otherwise a round trip re-reads its own
+      // Equipment and Unit columns as if they were units.
+      const flat = detectHeader(worksheet, register);
+      if (flat && hasFlatHistoryColumns(flat)) {
+        const nameHit = normaliseKey(register.sheetName) === sheetKey;
+        if (!best || flat.matched > best.score || (flat.matched === best.score && nameHit && !best.nameMatch)) {
+          best = { register, header: flat, score: flat.matched, nameMatch: nameHit };
+        }
+        continue;
+      }
+
+      const wide = detectHistoryHeader(worksheet, register);
+      if (wide) {
+        const score = wide.units.length + 1;
+        const nameHit =
+          normaliseKey(register.sheetName) === sheetKey ||
+          register.sheetAliases.some((alias) => normaliseKey(alias) === sheetKey);
+        if (!best || score > best.score || (score === best.score && nameHit && !best.nameMatch)) {
+          best = { register, header: { ...wide, matched: score, columnMap: new Map(), unmapped: [] }, score, nameMatch: nameHit };
+        }
+        continue;
+      }
+    }
+
     const header = detectHeader(worksheet, register);
     if (!header) continue;
 
@@ -246,12 +278,158 @@ export function suggestRegister(worksheet) {
  * before it counts, which is also what keeps the pre-numbered empty rows on the
  * manpower sheets from importing as twelve nameless people.
  */
+/** Any cell anywhere in the row holding something. */
+function rowHasContent(row) {
+  let found = false;
+  row.eachCell({ includeEmpty: false }, (cell) => {
+    if (found) return;
+    const value = cellString(cell.value);
+    if (value instanceof Date) found = true;
+    else if (String(value ?? '').trim() !== '') found = true;
+  });
+  return found;
+}
+
+/** A sheet already in the flat shape names the unit and the event as columns. */
+function hasFlatHistoryColumns(header) {
+  const fields = new Set([...header.columnMap.values()].map((c) => c.field));
+  return fields.has('unit') && fields.has('event');
+}
+
 function isRecord(register, data) {
   return register.identityFields.some((key) => String(data[key] ?? '').trim() !== '');
 }
 
+/* ------------------------------------------------------------------ *
+ * The wide equipment-history layout
+ * ------------------------------------------------------------------ */
+
+/**
+ * Find the header of a wide history sheet: a `Date` column, then one column per
+ * unit, then the columns shared by the whole row.
+ *
+ * Returns null when the sheet is not that shape. The banner row and the stray
+ * `Column1 … Column16` row Excel leaves behind on a table are skipped by the
+ * simple expedient of looking for `Date` rather than counting rows.
+ */
+export function detectHistoryHeader(worksheet, register) {
+  const shared = new Set(register.history.sharedHeaders.map(normaliseKey));
+  const dateKey = normaliseKey(register.history.dateHeader);
+  const limit = Math.min(worksheet.rowCount || HEADER_SEARCH_ROWS, HEADER_SEARCH_ROWS);
+
+  for (let rowNumber = 1; rowNumber <= limit; rowNumber += 1) {
+    const { labels } = rowLabels(worksheet, rowNumber);
+    const columns = [...labels.entries()].sort((a, b) => a[0] - b[0]);
+    const dateEntry = columns.find(([, label]) => normaliseKey(label) === dateKey);
+    if (!dateEntry) continue;
+
+    const units = [];
+    const sharedColumns = new Map();
+    for (const [col, label] of columns) {
+      if (col <= dateEntry[0]) continue;
+      const key = normaliseKey(label);
+      if (shared.has(key)) {
+        sharedColumns.set(key === 'remiarks' ? 'remarks' : key.replace('activityduration', 'duration'), col);
+        continue;
+      }
+      // Anything past the shared columns belongs to something else — the Rotary
+      // Joint sheet parks a spare-parts list out there — so unit columns are
+      // only the ones before the first shared one.
+      if (sharedColumns.size > 0) continue;
+      units.push({ col, name: label.trim() });
+    }
+
+    if (units.length < 2) continue;
+
+    /*
+     * A two-row header: `BUCKET 23` merged across a pair of columns, with
+     * `Open /close` and `Equalizer` naming them underneath. Left alone, the
+     * sub-header row imports as four events called "Open /close" and
+     * "Equalizer", and the two columns under one bucket are indistinguishable
+     * because the merge reports the same name for both.
+     *
+     * The merge itself is the signal, so this asks the sheet rather than
+     * guessing from the shape of the values.
+     */
+    const merged = units.some((unit) => {
+      const cell = worksheet.getCell(rowNumber, unit.col);
+      return cell.isMerged && (cell.master?.row ?? rowNumber) === rowNumber;
+    });
+
+    let span = 1;
+    if (merged) {
+      const below = rowLabels(worksheet, rowNumber + 1).labels;
+      const named = units.filter((unit) => below.get(unit.col));
+      if (named.length === units.length) {
+        for (const unit of units) unit.name = `${unit.name} · ${below.get(unit.col).trim()}`;
+        span = 2;
+      }
+    }
+
+    return { rowNumber, span, dateColumn: dateEntry[0], units, sharedColumns };
+  }
+
+  return null;
+}
+
+/**
+ * Unpivot a wide history sheet into one record per event.
+ *
+ * A row can name several units at once — the same shutdown touching two drums —
+ * and each becomes its own record, because "what happened to DRUM 4" is the
+ * question this sheet exists to answer.
+ */
+export function readHistorySheet(worksheet, register, header = detectHistoryHeader(worksheet, register)) {
+  if (!header) return { rows: [], skipped: 0, legend: [], extraColumns: [], header: null };
+
+  const equipment = worksheet.name.trim();
+  const rows = [];
+  let skipped = 0;
+
+  for (let rowNumber = header.rowNumber + (header.span ?? 1); rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    if (!row || !row.cellCount) continue;
+
+    const rawDate = cellString(row.getCell(header.dateColumn).value);
+    const when = rawDate instanceof Date ? toDateOnly(rawDate) : toDateOnly(rawDate) ?? String(rawDate ?? '').trim();
+
+    const sharedValues = {};
+    for (const [field, col] of header.sharedColumns) {
+      const value = String(cellString(row.getCell(col).value) ?? '').trim();
+      if (value) sharedValues[field] = value;
+    }
+
+    let made = 0;
+    for (const unit of header.units) {
+      const event = String(cellString(row.getCell(unit.col).value) ?? '').trim();
+      if (!event) continue;
+      rows.push({
+        data: { equipment, unit: unit.name, event, ...(when ? { date: when } : {}), ...sharedValues },
+        sourceRow: rowNumber,
+      });
+      made += 1;
+    }
+
+    // A row that names no unit is not an event. On the Rotary Joint sheet those
+    // are the spare-part numbers parked off to the right of the table — a parts
+    // list, not history. They are counted, not silently dropped, so the import
+    // report says what it left behind.
+    if (made === 0 && rowHasContent(row)) skipped += 1;
+  }
+
+  return { rows, skipped, legend: [], extraColumns: [], header: { ...header, matched: header.units.length + 1 } };
+}
+
 /** Read every data row of one sheet as one register. */
 export function readSheet(worksheet, register, header = detectHeader(worksheet, register)) {
+  // The history register reads two shapes: the team's wide workbook, and the
+  // flat table this app exports. Whichever the sheet is in, the records come out
+  // the same — which is what makes exporting, editing and re-importing work.
+  if (register.history && (!header || !header.columnMap.size || !hasFlatHistoryColumns(header))) {
+    const wide = readHistorySheet(worksheet, register);
+    if (wide.header) return wide;
+  }
+
   if (!header) {
     return { rows: [], skipped: 0, legend: [], extraColumns: [], header: null };
   }

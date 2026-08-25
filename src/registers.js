@@ -779,6 +779,75 @@ export const REGISTERS = [
   },
 
   /* ---------------------------------------------------------------- *
+   * 12. Equipment history
+   * ---------------------------------------------------------------- */
+  {
+    id: 'equipment-history',
+    name: 'Equipment History',
+    short: 'HIST',
+    // A record of what has already happened, not work waiting to be done. It is
+    // its own kind so it never lands in the overdue counts or the due-date
+    // charts: a job done in July is not a job that is late.
+    kind: 'log',
+    group: 'History',
+    description: 'What has been done to each piece of equipment, and when.',
+    sheetName: 'Equipment History',
+    banner: 'EQUIPMENT HISTORY',
+    sheetAliases: [
+      'equipment history',
+      'rotary joint',
+      'winch drum',
+      'wire rope',
+      'cutting tool',
+      'isolation valvss',
+      'isolation valves',
+      'sumppumps',
+      'sump pumps',
+      'jet pump',
+      'buckets  wires',
+      'crusher 1  2',
+      'belt feeder 7 8',
+      'hpu unit',
+      'cooling system jetpump',
+      'pzvs',
+    ],
+    identityFields: ['event', 'unit'],
+    tableColumns: ['date', 'equipment', 'unit', 'event', 'duration', 'remarks', 'resources'],
+    fields: [
+      date('date', 'Date', ['date']),
+      // Which sheet the row came from. The workbook keeps a sheet per equipment
+      // family and a column per unit inside it, so the sheet name is data — it
+      // is the only place the family is written down.
+      text('equipment', 'Equipment', ['equipment', 'equipment group', 'family']),
+      text('unit', 'Unit', ['unit', 'tag', 'drum', 'item']),
+      longtext('event', 'What happened', ['what happened', 'event', 'activity', 'work done']),
+      text('duration', 'Activity Duration', ['activity duration', 'duration']),
+      // `REMIARKS` is how the PZV sheet spells it.
+      longtext('remarks', 'Remarks', ['remarks', 'remiarks', 'remark', 'comments', 'notes']),
+      longtext('resources', 'Resources', ['resources', 'resource', 'crew']),
+    ],
+    roles: {
+      ref: 'unit',
+      title: 'event',
+      issued: 'date',
+      location: 'unit',
+      // No `due`: nothing here is owed. Declaring one would put every completed
+      // job in the overdue list the day after it was done.
+    },
+    /**
+     * The workbook lays this out wide: a Date, then one column per unit, and the
+     * cell says what happened to that unit that day. Reading it column-by-column
+     * would give one field per drum and nothing to search. It is unpivoted on
+     * import — one row per event — and these are the columns that are shared by
+     * the whole row rather than belonging to a unit.
+     */
+    history: {
+      dateHeader: 'date',
+      sharedHeaders: ['activity duration', 'remarks', 'remiarks', 'resources'],
+    },
+  },
+
+  /* ---------------------------------------------------------------- *
    * 12–13. Annual plans — one row per person, one column per month
    * ---------------------------------------------------------------- */
   annualPlan({
