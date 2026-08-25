@@ -86,7 +86,10 @@ export function summarise(records, registerIds, today = todayIso()) {
     }
     const entry = perRegister.get(item.registerId);
 
-    if (register.kind === 'people') {
+    // Only job registers reach the due counts. A people sheet is a grid, and a
+    // history log is a record of what already happened — putting either in the
+    // overdue figures would make the number meaningless.
+    if (register.kind !== 'jobs') {
       entry.total += 1;
       entry.cellsFilled += item.derived.filledCells ?? 0;
       entry.cellsTotal += item.derived.totalCells ?? 0;
@@ -176,7 +179,7 @@ const HORIZON_WEEKS = 12;
  * with nothing on the page saying so.
  */
 function dueBuckets(items) {
-  const open = items.filter((i) => !CLOSED_STATUSES.has(i.derived.status) && i.kind !== 'people');
+  const open = items.filter((i) => i.kind === 'jobs' && !CLOSED_STATUSES.has(i.derived.status));
   const weeks = Array.from({ length: HORIZON_WEEKS }, (_, i) => ({
     key: `w${i + 1}`,
     label: i === 0 ? 'This week' : `+${i + 1}w`,
@@ -199,7 +202,7 @@ function dueBuckets(items) {
 }
 
 function byPriority(items) {
-  const open = items.filter((i) => !CLOSED_STATUSES.has(i.derived.status) && i.kind !== 'people');
+  const open = items.filter((i) => i.kind === 'jobs' && !CLOSED_STATUSES.has(i.derived.status));
   return PRIORITIES.map(({ value }) => ({
     priority: value,
     total: open.filter((i) => i.derived.priority === value).length,
@@ -213,7 +216,7 @@ const OWNER_LIMIT = 12;
 function byOwner(items) {
   const counts = new Map();
   for (const item of items) {
-    if (item.kind === 'people') continue;
+    if (item.kind !== 'jobs') continue;
     if (CLOSED_STATUSES.has(item.derived.status)) continue;
     // Whichever column this register uses to say who has it. A rental sheet
     // names a supplier, not a person, and that is still the answer to "who is

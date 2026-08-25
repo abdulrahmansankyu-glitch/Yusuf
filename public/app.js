@@ -1065,6 +1065,16 @@ function peopleView(summary) {
 }
 
 function registerCard(entry) {
+  if (entry.kind === 'log') {
+    return h(
+      'button',
+      { class: 'register-card', onclick: () => go({ name: 'register', id: entry.id }) },
+      h('div', { class: 'rc-top' }, h('strong', {}, entry.name), h('span', { class: 'total' }, String(entry.total))),
+      h('div', { class: 'rc-desc' }, registerById(entry.id)?.description ?? ''),
+      h('div', { class: 'bar' }, h('span', { class: 's-scheduled', style: 'width:100%' })),
+      h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--scheduled)' }), 'Entries ', h('b', {}, String(entry.total)))),
+    );
+  }
   const people = entry.kind === 'people';
   const segments = people
     ? [{ key: 'filled', value: entry.cellsFilled }, { key: 'undated', value: Math.max(0, entry.cellsTotal - entry.cellsFilled) }]

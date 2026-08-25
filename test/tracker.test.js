@@ -649,3 +649,125 @@ test('the asset stamp follows the content, so a deploy cannot be cached away', a
 
   await fs.rm(dir, { recursive: true, force: true });
 });
+
+/* ------------------------------------------------------------------ *
+ * Equipment history — the wide layout
+ * ------------------------------------------------------------------ */
+
+/** The team's shape: a Date, a column per unit, then columns shared by the row. */
+function historyWorkbook() {
+  const workbook = new ExcelJS.Workbook();
+  sheetWith(workbook, 'Rotary Joint', [
+    ['ROTARY JOINTS HISTORY'],
+    ['Date', 'RJ DRUM1', 'RJ DRUM2', 'RJ DRUM3', 'ACTIVITY DURATION', 'REMARKS', 'RESOURCES', null, 'Rotary Joint spare'],
+    ['23/7/26', null, null, 'Bearing stuck, not rotating', '12 to 16 hours', 'Replaced with overhauled one', 'Hydratight crew'],
+    // One shutdown touching two drums at once.
+    ['24/7/26', 'Seal renewed', 'Seal renewed', null, '4 hours', 'Routine', 'Two technicians'],
+    // The spare-parts list parked off to the right of the table: not an event.
+    [null, null, null, null, null, null, null, null, '11027683', 'O RNG;VITON'],
+  ], { merges: ['A1:G1'] });
+  return workbook;
+}
+
+test('a wide history sheet becomes one record per unit that was touched', async () => {
+  const buffer = await historyWorkbook().xlsx.writeBuffer();
+  const { sheets } = await readWorkbook(buffer);
+  const history = sheets.find((s) => s.registerId === 'equipment-history');
+
+  assert.ok(history, 'the sheet was not recognised as equipment history');
+  assert.equal(history.rowCount, 3, 'two drums on one row are two records');
+
+  assert.deepEqual(history.rows[0], {
+    equipment: 'Rotary Joint',
+    unit: 'RJ DRUM3',
+    event: 'Bearing stuck, not rotating',
+    date: '2026-07-23',
+    duration: '12 to 16 hours',
+    remarks: 'Replaced with overhauled one',
+    resources: 'Hydratight crew',
+  });
+
+  // The columns shared by the row are copied onto every record it produces.
+  assert.deepEqual(
+    history.rows.slice(1).map((r) => [r.unit, r.event, r.duration]),
+    [
+      ['RJ DRUM1', 'Seal renewed', '4 hours'],
+      ['RJ DRUM2', 'Seal renewed', '4 hours'],
+    ],
+  );
+});
+
+test('a row naming no unit is counted, not silently dropped', async () => {
+  const buffer = await historyWorkbook().xlsx.writeBuffer();
+  const { sheets } = await readWorkbook(buffer);
+  const history = sheets.find((s) => s.registerId === 'equipment-history');
+  // The spare-parts row. It is not history, but the import must say so rather
+  // than quietly losing it.
+  assert.equal(history.skipped, 1);
+});
+
+test('a two-row header names the columns under a merged heading', async () => {
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = sheetWith(workbook, 'Buckets & Wires', [
+    ['BUCKET WIRE ROPE 38 MM DIA'],
+    ['Date', 'BUCKET 23', null, 'BUCKET 24', null],
+    [null, 'Open /close', 'Equalizer', 'Open /close', 'Equalizer'],
+    ['01/08/26', 'Rope replaced', null, null, 'Sheave changed'],
+  ]);
+  worksheet.mergeCells('B2:C2');
+  worksheet.mergeCells('D2:E2');
+  worksheet.mergeCells('A2:A3');
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const { sheets } = await readWorkbook(buffer);
+  const history = sheets.find((s) => s.registerId === 'equipment-history');
+
+  // Without reading both rows the sub-header imports as four events called
+  // "Open /close" and "Equalizer", and the two columns under one bucket are
+  // indistinguishable because the merge reports the same name for both.
+  assert.equal(history.rowCount, 2);
+  assert.deepEqual(
+    history.rows.map((r) => [r.unit, r.event]),
+    [
+      ['BUCKET 23 · Open /close', 'Rope replaced'],
+      ['BUCKET 24 · Equalizer', 'Sheave changed'],
+    ],
+  );
+});
+
+test('history never reaches the overdue counts', () => {
+  const records = [
+    { id: '1', registerId: 'equipment-history', data: { equipment: 'Rotary Joint', unit: 'RJ DRUM4', event: 'Bearing stuck', date: '2020-01-01' } },
+    { id: '2', registerId: 'iws', data: { iwsNo: 'A', details: 'Late', etc: '2026-08-01' } },
+  ];
+  const summary = summarise(records, ['iws', 'equipment-history'], '2026-08-22');
+
+  assert.equal(summary.totals.total, 1, 'a completed job from 2020 is not a job');
+  assert.equal(summary.totals.overdue, 1);
+  assert.equal(summary.totals.undated, 0, 'nor is it undated work');
+  assert.equal(summary.charts.byOwner.length, 0);
+
+  const log = summary.registers.find((r) => r.id === 'equipment-history');
+  assert.equal(log.kind, 'log');
+  assert.equal(log.total, 1, 'but it is still counted on its own line');
+});
+
+test('an exported history sheet reads back in its flat shape', async () => {
+  const records = new Map([
+    ['equipment-history', [
+      { id: '1', data: { equipment: 'PZVs', unit: '1640 A', event: 'Removed', date: '2026-07-26', remarks: 'Calibration' } },
+    ]],
+  ]);
+  const buffer = await writeWorkbook({ recordsByRegister: records, summary: null, registerIds: ['equipment-history'] });
+  const { sheets } = await readWorkbook(buffer);
+
+  assert.equal(sheets[0].registerId, 'equipment-history');
+  assert.equal(sheets[0].rowCount, 1);
+  assert.deepEqual(sheets[0].rows[0], {
+    equipment: 'PZVs',
+    unit: '1640 A',
+    event: 'Removed',
+    date: '2026-07-26',
+    remarks: 'Calibration',
+  });
+});
