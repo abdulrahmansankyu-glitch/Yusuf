@@ -1676,10 +1676,24 @@ function settingsPage() {
   function registerPicker(selected, onChange) {
     const chosen = new Set(selected ?? []);
     const summary = h('div', { class: 'field-note' });
+
+    /**
+     * An explicit list is a list of *these* registers, and a register added to
+     * the app afterwards is not on it. That is the right way round for a
+     * permission — it fails closed — but it is invisible: somebody's colleague
+     * simply does not have the new tab and nobody knows why. So the note says
+     * so, and there is one click to hand back everything including whatever
+     * comes next.
+     */
     const paint = () => {
-      summary.textContent = chosen.size === 0
-        ? 'Nothing ticked — this account sees every register.'
-        : `${chosen.size} of ${registerOptions.length} registers.`;
+      const missing = registerOptions.length - chosen.size;
+      summary.replaceChildren(
+        chosen.size === 0
+          ? document.createTextNode('Nothing ticked — this account sees every register, including any added later.')
+          : document.createTextNode(
+              `${chosen.size} of ${registerOptions.length} registers · ${missing} hidden from this account, and registers added later will be hidden too.`,
+            ),
+      );
     };
     paint();
 
@@ -1704,7 +1718,28 @@ function settingsPage() {
         ),
       ),
     );
-    return { node: h('div', {}, list, summary), get: () => [...chosen] };
+    const grantAll = h(
+      'button',
+      {
+        type: 'button',
+        class: 'small',
+        onclick: () => {
+          // Clearing the list, not ticking every box: an empty list means every
+          // register now and in future, where sixteen ticks would freeze this
+          // account at today's sixteen.
+          chosen.clear();
+          for (const box of list.querySelectorAll('input')) box.checked = false;
+          paint();
+          onChange?.([]);
+        },
+      },
+      'Allow every register',
+    );
+
+    return {
+      node: h('div', {}, list, h('div', { style: 'margin-top:6px' }, grantAll), summary),
+      get: () => [...chosen],
+    };
   }
 
   /* ---------------- Add somebody ---------------- */
@@ -1769,7 +1804,14 @@ function settingsPage() {
         h(
           'td',
           {},
-          user.registers?.length ? `${user.registers.length} of ${registerOptions.length}` : 'All',
+          user.registers?.length
+            ? h(
+                'span',
+                {},
+                `${user.registers.length} of ${registerOptions.length}`,
+                h('span', { class: 'sub' }, `${registerOptions.length - user.registers.length} hidden`),
+              )
+            : 'All',
           ' ',
           h(
             'button',
