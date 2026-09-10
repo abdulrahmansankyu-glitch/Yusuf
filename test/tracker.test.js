@@ -9,7 +9,11 @@
  */
 
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { randomUUID } from 'node:crypto';
 import ExcelJS from 'exceljs';
 
 import { toDateOnly, formatDate, daysUntil } from '../src/dates.js';
@@ -24,7 +28,7 @@ import {
 import { detectHeader, readSheet, readWorkbook, suggestRegister, writeWorkbook } from '../src/excel.js';
 import { nextNumber } from '../src/autonumber.js';
 import { hashPassword, isLastAdmin, signToken, verifyPassword, verifyToken, mayUseRegister } from '../src/auth.js';
-import { connectionSettings } from '../src/store.js';
+import { connectionSettings, openStore } from '../src/store.js';
 import { stampAssets } from '../src/server.js';
 import { summarise } from '../src/summary.js';
 
@@ -337,10 +341,43 @@ test('a people row reports how much of its own grid is filled', () => {
   assert.equal(record.totalCells, 15);
 });
 
-test('progress reads the same whether the sheet wrote 80, 80% or 0.8', () => {
-  assert.equal(derive('fab-ws', { jobDescription: 'x', progress: 80 }).progress, 80);
-  assert.equal(derive('fab-ws', { jobDescription: 'x', progress: '80%' }).progress, 80);
-  assert.equal(derive('fab-ws', { jobDescription: 'x', progress: 0.8 }).progress, 80);
+test('a select keeps a value the sheet brought in that is not on its list', () => {
+  // SAP writes YM03 into Order Type, whose list is Emergency/Normal/Urgent. The
+  // register stores what the sheet said; only the form offers the three.
+  const record = derive('planner-pm', { order: '830000590416', orderType: 'YM03', description: 'x' });
+  assert.equal(record.ref, '830000590416');
+
+  const orderType = getRegister('planner-pm').fields.find((f) => f.key === 'orderType');
+  assert.equal(orderType.type, 'select');
+  assert.deepEqual(orderType.options, ['Emergency', 'Normal', 'Urgent']);
+});
+
+test('the registers carry the columns the team asked for', () => {
+  const commercial = getRegister('commercial');
+  assert.ok(commercial.tableColumns.includes('followUp'), 'Follow up is on screen');
+  assert.equal(commercial.fields.find((f) => f.key === 'material').type, 'text', 'Material is typed by hand');
+
+  const iws = getRegister('iws');
+  for (const key of ['resources', 'supplier']) {
+    assert.equal(iws.fields.find((f) => f.key === key).type, 'text', `${key} is typed by hand`);
+  }
+
+  const fab = getRegister('fab-ws');
+  assert.equal(fab.fields.find((f) => f.key === 'progress'), undefined, 'Progress is gone');
+  assert.ok(!fab.tableColumns.includes('progress'));
+  assert.equal(fab.fields.find((f) => f.key === 'resources').type, 'text');
+
+  const planner = getRegister('planner-pm');
+  assert.equal(planner.short, 'CM');
+  assert.equal(planner.fields.find((f) => f.key === 'workCenter').label, 'Equipments Tag');
+  assert.ok(planner.fields.some((f) => f.key === 'notification'));
+
+  const assigned = getRegister('assigned-jobs');
+  assert.ok(assigned.tableColumns.includes('actionBy'), 'Action By is on screen');
+  assert.deepEqual(
+    assigned.fields.find((f) => f.key === 'materialStatus').options,
+    ['Need to arrange', 'Waiting', 'Not received'],
+  );
 });
 
 /* ------------------------------------------------------------------ *
@@ -518,6 +555,30 @@ test('deleting the most recent entry does release its number', () => {
   // stored high-water mark per month, which the app does not keep.
   assert.equal(nextNumber(['IWS-2608-01', 'IWS-2608-02'], { prefix: 'IWS' }, august), 'IWS-2608-03');
   assert.equal(nextNumber(['IWS-2608-01'], { prefix: 'IWS' }, august), 'IWS-2608-02');
+});
+
+/* ------------------------------------------------------------------ *
+ * Deleting
+ * ------------------------------------------------------------------ */
+
+test('several entries are deleted in one go, and only the ones named', async () => {
+  const file = path.join(os.tmpdir(), `tracker-delete-${randomUUID()}.json`);
+  const store = await openStore({ databaseUrl: '', file });
+  const made = await store.createMany('iws', [{ iwsNo: 'A' }, { iwsNo: 'B' }, { iwsNo: 'C' }], 'Tester');
+
+  const removed = await store.remove([made[0].id, made[2].id]);
+  assert.equal(removed, 2);
+  assert.deepEqual((await store.list('iws')).map((r) => r.data.iwsNo), ['B']);
+
+  // A single id arrives as a string from the one-record route. Handing that
+  // to a Set would spread it into characters and delete nothing at all.
+  assert.equal(await store.remove(made[1].id), 1);
+  assert.equal((await store.list('iws')).length, 0);
+
+  // An id that no longer exists is counted as nothing removed, not as an error:
+  // two people deleting the same row is a race, not a fault.
+  assert.equal(await store.remove([made[0].id]), 0);
+  await fs.rm(file, { force: true });
 });
 
 /* ------------------------------------------------------------------ *

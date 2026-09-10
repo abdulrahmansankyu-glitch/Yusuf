@@ -16,6 +16,9 @@ const state = {
   registers: [],
   route: { name: 'dashboard' },
   dashboardView: 'overview',
+  selected: new Set(),
+  allJobs: [],
+  jobFilter: {},
   summary: null,
   activity: [],
   records: [],
@@ -78,6 +81,8 @@ function fmtWhen(iso) {
   if (Number.isNaN(d.getTime())) return '';
   return d.toLocaleString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
+
+const CLOSED = new Set(['Completed', 'Cancelled']);
 
 const STATE_LABEL = {
   overdue: 'Overdue',
@@ -177,8 +182,14 @@ async function loadRoute() {
   render();
   try {
     if (state.route.name === 'dashboard') {
-      state.summary = await api('/summary');
-      state.activity = (await api('/activity?limit=12')).activity;
+      const [summary, activity, jobs] = await Promise.all([
+        api('/summary'),
+        api('/activity?limit=12'),
+        api('/records'),
+      ]);
+      state.summary = summary;
+      state.activity = activity.activity;
+      state.allJobs = jobs.records;
     } else if (state.route.name === 'register') {
       // The summary comes too: the sidebar prints each register's total and its
       // overdue count, and closing a job here left that flag reading one too
@@ -203,7 +214,10 @@ async function loadRoute() {
 
 function go(route) {
   state.route = route;
-  state.filters = {};
+  // A route may arrive carrying the question that was clicked — "the overdue
+  // ones on Rental Equipment" — rather than always landing on everything.
+  state.filters = route.filters ?? {};
+  state.selected = new Set();
   state.sort = route.name === 'register' ? { key: 'dueDate', dir: 1 } : state.sort;
   state.drawer = null;
   loadRoute();
@@ -350,6 +364,7 @@ const DASHBOARD_VIEWS = [
   { id: 'charts', label: 'Charts', hint: 'The shape of the work' },
   { id: 'plant', label: '3D view', hint: 'The whole department as one landscape' },
   { id: 'people', label: 'People', hint: 'Who is carrying it, and what is missing' },
+  { id: 'jobs', label: 'All jobs', hint: 'Every job in every register, in one list' },
 ];
 
 function dashboard() {
@@ -394,7 +409,9 @@ function dashboard() {
         ? chartsView(summary)
         : view.id === 'plant'
           ? plantView(summary)
-          : peopleView(summary),
+          : view.id === 'jobs'
+            ? jobsView()
+            : peopleView(summary),
   );
 }
 
@@ -425,9 +442,25 @@ function stackedBar(segments, total, max) {
         .filter((segment) => segment.value > 0)
         .map((segment) =>
           h('span', {
-            class: `seg s-${segment.key}`,
+            class: `seg s-${segment.key}${segment.pick ? ' pickable' : ''}`,
             style: `width:${(segment.value / sum) * 100}%`,
-            title: `${segment.label}: ${segment.value}`,
+            title: segment.pick
+              ? `${segment.label}: ${segment.value} — click to list them`
+              : `${segment.label}: ${segment.value}`,
+            // A segment that leads somewhere is a control, so it answers to the
+            // keyboard as well as the mouse. One without a `pick` stays inert
+            // rather than pretending: there is no list behind it to open.
+            role: segment.pick ? 'button' : false,
+            tabindex: segment.pick ? '0' : false,
+            onclick: segment.pick ? () => openJobs(segment.pick) : false,
+            onkeydown: segment.pick
+              ? (event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openJobs(segment.pick);
+                  }
+                }
+              : false,
           }),
         ),
     ),
@@ -478,8 +511,10 @@ function donut(segments, { total, centreLabel } = {}) {
       'stroke-width': DONUT.width,
       'stroke-dasharray': `${drawn} ${circumference - drawn}`,
       'stroke-dashoffset': -offset,
+      class: seg.pick ? 'slice' : '',
     });
     arc.append(svg('title', {}, `${seg.label}: ${seg.value} (${Math.round((seg.value / sum) * 100)}%)`));
+    if (seg.pick) arc.addEventListener('click', () => openJobs(seg.pick));
     offset += length;
     return arc;
   });
@@ -511,8 +546,11 @@ function donut(segments, { total, centreLabel } = {}) {
       { class: 'donut-key' },
       segments.map((seg) =>
         h(
-          'div',
-          { class: 'donut-key-row' },
+          seg.pick ? 'button' : 'div',
+          {
+            class: `donut-key-row ${seg.pick ? 'pickable' : ''}`,
+            ...(seg.pick ? { onclick: () => openJobs(seg.pick) } : {}),
+          },
           h('i', { style: `background:var(--${seg.key})` }),
           h('span', { class: 'donut-key-label' }, seg.label),
           h('b', {}, String(seg.value)),
@@ -523,12 +561,19 @@ function donut(segments, { total, centreLabel } = {}) {
   );
 }
 
-function chartRow(label, segments, { total, value, sub, max } = {}) {
+function chartRow(label, segments, { total, value, sub, max, pick } = {}) {
   const sum = total ?? segments.reduce((n, seg) => n + seg.value, 0);
   return h(
     'div',
     { class: 'chart-row' },
-    h('span', { class: 'chart-label', title: label }, label, sub ? h('span', { class: 'sub' }, sub) : null),
+    pick
+      ? h(
+          'button',
+          { class: 'chart-label pickable', title: `${label} — click to list them`, onclick: () => openJobs(pick) },
+          label,
+          sub ? h('span', { class: 'sub' }, sub) : null,
+        )
+      : h('span', { class: 'chart-label', title: label }, label, sub ? h('span', { class: 'sub' }, sub) : null),
     stackedBar(segments, sum, max),
     h('span', { class: 'chart-value' }, String(value ?? sum)),
   );
@@ -555,13 +600,15 @@ function card(title, note, body) {
 
 function overviewView(summary) {
   const t = summary.totals;
+  // Every tile opens the list it counts. A figure nobody can get behind is a
+  // figure nobody can act on.
   const kpis = [
-    { label: 'Total jobs', value: t.total, note: `${summary.registerCount} registers` },
-    { label: 'Open', value: t.open },
-    { label: 'Overdue', value: t.overdue, className: 'overdue' },
-    { label: `Due in ${summary.dueSoonDays} days`, value: t.dueSoon, className: 'due-soon' },
-    { label: 'Closed', value: t.closed, className: 'closed' },
-    { label: 'No date set', value: t.undated, note: 'Not counted as late' },
+    { label: 'Total jobs', value: t.total, note: `${summary.registerCount} registers`, pick: {} },
+    { label: 'Open', value: t.open, pick: { open: true } },
+    { label: 'Overdue', value: t.overdue, className: 'overdue', pick: { state: 'overdue' } },
+    { label: `Due in ${summary.dueSoonDays} days`, value: t.dueSoon, className: 'due-soon', pick: { state: 'due-soon' } },
+    { label: 'Closed', value: t.closed, className: 'closed', pick: { state: 'closed' } },
+    { label: 'No date set', value: t.undated, note: 'Not counted as late', pick: { state: 'undated' } },
   ];
   if (summary.people.sheets) {
     kpis.push({
@@ -576,8 +623,11 @@ function overviewView(summary) {
     {},
     h('div', { class: 'kpis' }, kpis.map((k) =>
       h(
-        'div',
-        { class: `kpi ${k.className ?? ''}` },
+        k.pick ? 'button' : 'div',
+        {
+          class: `kpi ${k.className ?? ''} ${k.pick ? 'kpi-link' : ''}`,
+          ...(k.pick ? { title: 'Open this list', onclick: () => openJobs(k.pick) } : {}),
+        },
         h('div', { class: 'label' }, k.label),
         h('div', { class: 'value' }, String(k.value)),
         h('div', { class: 'note' }, k.note ?? ''),
@@ -587,13 +637,11 @@ function overviewView(summary) {
       'Every job, by state',
       `${t.total} across ${summary.registerCount} registers`,
       donut(
-        [
-          { key: 'overdue', label: 'Overdue', value: t.overdue },
-          { key: 'due-soon', label: 'Due soon', value: t.dueSoon },
-          { key: 'scheduled', label: 'Scheduled', value: t.scheduled },
-          { key: 'undated', label: 'No date', value: t.undated },
-          { key: 'closed', label: 'Closed', value: t.closed },
-        ],
+        STATE_SERIES.map((s) => ({
+          ...s,
+          value: s.key === 'due-soon' ? t.dueSoon : t[s.key],
+          pick: { state: s.key },
+        })),
         { total: t.total, centreLabel: 'jobs' },
       ),
     ),
@@ -648,6 +696,181 @@ function overviewView(summary) {
   );
 }
 
+/* ---------------------------------------------------------------- All jobs */
+
+/**
+ * Every job in every register, in one list.
+ *
+ * The dashboard's figures are counted across registers, so clicking one has to
+ * land somewhere that can show them all — a per-register page cannot answer
+ * "the eleven things that are overdue".
+ */
+function openJobs(filter) {
+  state.dashboardView = 'jobs';
+  state.jobFilter = filter ?? {};
+  render();
+}
+
+function jobsView() {
+  const f = state.jobFilter;
+  const query = (f.q ?? '').trim().toLowerCase();
+
+  const rows = state.allJobs.filter((record) => {
+    if (f.registerId && record.registerId !== f.registerId) return false;
+    if (f.state && record.state !== f.state) return false;
+    if (f.priority && record.derived.priority !== f.priority) return false;
+    if (f.open && CLOSED.has(record.derived.status)) return false;
+    // A due window is expressed in days from today — the same figure the
+    // server bucketed the columns by — so a column and the list behind it can
+    // never disagree about which week a job falls in.
+    if (f.dueFrom !== undefined || f.dueTo !== undefined) {
+      const days = record.daysToDue;
+      if (days === null || days === undefined) return false;
+      if (f.dueFrom !== undefined && days < f.dueFrom) return false;
+      if (f.dueTo !== undefined && days > f.dueTo) return false;
+    }
+    if (query && !Object.values(record.data ?? {}).join(' ').toLowerCase().includes(query)) return false;
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    const rank = { overdue: 0, 'due-soon': 1, scheduled: 2, undated: 3, closed: 4 };
+    return (rank[a.state] ?? 9) - (rank[b.state] ?? 9) || (a.daysToDue ?? 1e9) - (b.daysToDue ?? 1e9);
+  });
+
+  const set = (key) => (event) => {
+    state.jobFilter = { ...state.jobFilter, [key]: event.target.value || undefined };
+    render();
+  };
+
+  const described = [
+    f.registerId && registerById(f.registerId)?.name,
+    f.state && STATE_LABEL[f.state],
+    f.priority && `${f.priority} priority`,
+    f.open && 'open only',
+    f.window,
+  ].filter(Boolean);
+
+  return h(
+    'div',
+    {},
+    h(
+      'div',
+      { class: 'toolbar' },
+      h('input', { class: 'grow', placeholder: 'Search every register…', value: f.q ?? '', oninput: set('q') }),
+      h(
+        'select',
+        { onchange: set('registerId') },
+        h('option', { value: '' }, 'Every register'),
+        state.registers
+          .filter((r) => r.kind === 'jobs')
+          .map((r) => h('option', { value: r.id, selected: f.registerId === r.id }, r.name)),
+      ),
+      h(
+        'select',
+        { onchange: set('state') },
+        h('option', { value: '' }, 'Any due state'),
+        ['overdue', 'due-soon', 'scheduled', 'undated', 'closed'].map((k) =>
+          h('option', { value: k, selected: f.state === k }, STATE_LABEL[k]),
+        ),
+      ),
+      h(
+        'select',
+        { onchange: set('priority') },
+        h('option', { value: '' }, 'Any priority'),
+        ['Critical', 'High', 'Medium', 'Low', 'Planned'].map((p) =>
+          h('option', { value: p, selected: f.priority === p }, p),
+        ),
+      ),
+      described.length
+        ? h('button', { class: 'small', onclick: () => openJobs({}) }, 'Clear filters')
+        : null,
+      h('span', { class: 'who' }, `${rows.length} of ${state.allJobs.length}`),
+    ),
+    h(
+      'div',
+      { class: 'card' },
+      rows.length
+        ? h(
+            'div',
+            { class: 'table-wrap' },
+            h(
+              'table',
+              {},
+              h(
+                'thead',
+                {},
+                h('tr', {}, ['Register', 'Reference', 'What', 'Owner', 'Due', 'State', 'Priority', ''].map((c) => h('th', {}, c))),
+              ),
+              h(
+                'tbody',
+                {},
+                rows.slice(0, 300).map((record) =>
+                  h(
+                    'tr',
+                    {},
+                    h('td', {}, registerById(record.registerId)?.short ?? record.registerId),
+                    h('td', {}, text(record.derived.ref)),
+                    h('td', {}, h('span', { class: 'cell-long' }, text(record.derived.title))),
+                    h('td', {}, text(record.derived.actionBy ?? record.derived.supplier ?? record.derived.initiator)),
+                    h(
+                      'td',
+                      {},
+                      record.derived.dueDate
+                        ? fmtDate(record.derived.dueDate)
+                        : h('span', { class: 'sub' }, text(record.derived.dueText, 'no date')),
+                    ),
+                    h(
+                      'td',
+                      {},
+                      h(
+                        'span',
+                        { class: `tag state-${record.state}` },
+                        record.state === 'overdue'
+                          ? `${-record.daysToDue}d late`
+                          : record.state === 'due-soon'
+                            ? `${record.daysToDue}d`
+                            : STATE_LABEL[record.state],
+                      ),
+                    ),
+                    h('td', {}, h('span', { class: `tag p-${record.derived.priority}` }, record.derived.priority)),
+                    h(
+                      'td',
+                      { class: 'row-actions' },
+                      // The entry itself first: a figure on the dashboard is
+                      // clicked to reach a job, not to reach the sheet it lives
+                      // on. The register is one click further for the times it
+                      // is the sheet that is wanted.
+                      h(
+                        'button',
+                        {
+                          class: 'small',
+                          onclick: () => {
+                            const register = registerById(record.registerId);
+                            if (register) openDrawer(register, record);
+                          },
+                        },
+                        state.can.write ? 'Edit' : 'View',
+                      ),
+                      h(
+                        'button',
+                        { class: 'small', onclick: () => go({ name: 'register', id: record.registerId }) },
+                        'Register',
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          )
+        : h('div', { class: 'empty' }, described.length ? `Nothing matches ${described.join(' · ')}.` : 'No jobs yet.'),
+    ),
+    rows.length > 300
+      ? h('div', { class: 'field-note' }, `Showing the first 300 of ${rows.length}. Narrow it with the filters above.`)
+      : null,
+  );
+}
+
 /* ---------------------------------------------------------------- Charts */
 
 /** The sequential ramp, tied to the grade rather than to its row number. */
@@ -684,13 +907,11 @@ function chartsView(summary) {
         'Every job, by state',
         'All registers',
         donut(
-          [
-            { key: 'overdue', label: 'Overdue', value: t.overdue },
-            { key: 'due-soon', label: 'Due soon', value: t.dueSoon },
-            { key: 'scheduled', label: 'Scheduled', value: t.scheduled },
-            { key: 'undated', label: 'No date', value: t.undated },
-            { key: 'closed', label: 'Closed', value: t.closed },
-          ],
+          STATE_SERIES.map((s) => ({
+            ...s,
+            value: s.key === 'due-soon' ? t.dueSoon : t[s.key],
+            pick: { state: s.key },
+          })),
           { total: t.total, centreLabel: 'jobs' },
         ),
       ),
@@ -704,6 +925,7 @@ function chartsView(summary) {
             key: PRIORITY_TOKEN[row.priority] ?? 'pri-5',
             label: row.priority,
             value: row.total,
+            pick: { priority: row.priority, open: true },
           })),
           { centreLabel: 'open' },
         ),
@@ -726,8 +948,13 @@ function chartsView(summary) {
                     key: s.key,
                     label: s.label,
                     value: s.key === 'due-soon' ? r.dueSoon : r[s.key] ?? 0,
+                    pick: { registerId: r.id, state: s.key },
                   })),
-                  { total: r.total, max: Math.max(...busiest.map((x) => x.total)) },
+                  {
+                    total: r.total,
+                    max: Math.max(...busiest.map((x) => x.total)),
+                    pick: { registerId: r.id },
+                  },
                 ),
               ),
             ),
@@ -746,14 +973,44 @@ function chartsView(summary) {
           'div',
           { class: 'columns' },
           [
-            { label: 'Late', full: 'Already overdue', count: buckets.overdue, key: 'overdue' },
-            ...buckets.weeks.map((w) => ({ label: w.label, full: w.label, count: w.count, key: 'scheduled' })),
-            { label: '12w+', full: 'Beyond 12 weeks', count: buckets.later, key: 'scheduled' },
-            { label: 'None', full: 'No date set', count: buckets.undated, key: 'undated' },
+            {
+              label: 'Late',
+              full: 'Already overdue',
+              count: buckets.overdue,
+              key: 'overdue',
+              pick: { open: true, state: 'overdue', window: 'already overdue' },
+            },
+            // Each week is picked by the same day window the server counted it
+            // by, so the list that opens holds exactly the jobs in the column.
+            ...buckets.weeks.map((w, i) => ({
+              label: w.label,
+              full: w.label,
+              count: w.count,
+              key: 'scheduled',
+              pick: { open: true, dueFrom: i * 7, dueTo: i * 7 + 6, window: `due ${w.label.toLowerCase()}` },
+            })),
+            {
+              label: `${buckets.weeks.length}w+`,
+              full: `Beyond ${buckets.weeks.length} weeks`,
+              count: buckets.later,
+              key: 'scheduled',
+              pick: {
+                open: true,
+                dueFrom: buckets.weeks.length * 7,
+                window: `due beyond ${buckets.weeks.length} weeks`,
+              },
+            },
+            { label: 'None', full: 'No date set', count: buckets.undated, key: 'undated', pick: { open: true, state: 'undated' } },
           ].map((bar) =>
             h(
-              'div',
-              { class: 'column', title: `${bar.full}: ${bar.count}` },
+              bar.count ? 'button' : 'div',
+              {
+                // An empty column is a fact, not a control: it keeps its stub
+                // and its label, but there is nothing to open behind it.
+                class: `column${bar.count ? ' pickable' : ''}`,
+                title: bar.count ? `${bar.full}: ${bar.count} — click to list them` : `${bar.full}: 0`,
+                onclick: bar.count ? () => openJobs(bar.pick) : false,
+              },
               h('span', { class: 'column-value' }, bar.count || ''),
               h('span', {
                 class: `column-fill s-${bar.key}`,
@@ -783,10 +1040,19 @@ function chartsView(summary) {
                 chartRow(
                   row.priority,
                   [
-                    { key: 'overdue', label: 'Overdue', value: row.overdue },
-                    { key: 'scheduled', label: 'On track', value: row.total - row.overdue },
+                    { key: 'overdue', label: 'Overdue', value: row.overdue, pick: { priority: row.priority, state: 'overdue' } },
+                    {
+                      key: 'scheduled',
+                      label: 'On track',
+                      value: row.total - row.overdue,
+                      pick: { priority: row.priority, open: true },
+                    },
                   ],
-                  { total: row.total, max: Math.max(...summary.charts.byPriority.map((x) => x.total)) },
+                  {
+                    total: row.total,
+                    max: Math.max(...summary.charts.byPriority.map((x) => x.total)),
+                    pick: { priority: row.priority, open: true },
+                  },
                 ),
               ),
             ),
@@ -1093,19 +1359,55 @@ function registerCard(entry) {
         ['Filled', `${entry.coverage ?? 0}%`, 'var(--closed)'],
       ]
     : [
-        ['Overdue', entry.overdue, 'var(--overdue)'],
-        ['Due soon', entry.dueSoon, 'var(--due-soon)'],
-        ['Open', entry.open, 'var(--scheduled)'],
-        ['Closed', entry.closed, 'var(--closed)'],
+        ['Overdue', entry.overdue, 'var(--overdue)', 'overdue'],
+        ['Due soon', entry.dueSoon, 'var(--due-soon)', 'due-soon'],
+        ['Open', entry.open, 'var(--scheduled)', 'open'],
+        ['Closed', entry.closed, 'var(--closed)', 'closed'],
       ];
 
+  // A div rather than a button, because each figure along the bottom is a
+  // control of its own and a button inside a button is not valid markup.
   return h(
-    'button',
-    { class: 'register-card', onclick: () => go({ name: 'register', id: entry.id }) },
+    'div',
+    {
+      class: 'register-card',
+      role: 'button',
+      tabindex: '0',
+      onclick: () => go({ name: 'register', id: entry.id }),
+      onkeydown: (event) => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          go({ name: 'register', id: entry.id });
+        }
+      },
+    },
     h('div', { class: 'rc-top' }, h('strong', {}, entry.name), h('span', { class: 'total' }, String(entry.total))),
     h('div', { class: 'rc-desc' }, registerById(entry.id)?.description ?? ''),
     h('div', { class: 'bar' }, segments.map((s) => h('span', { class: `s-${s.key}`, style: `width:${(s.value / total) * 100}%` }))),
-    h('div', { class: 'legend' }, legend.map(([label, value, colour]) => h('span', {}, h('i', { style: `background:${colour}` }), `${label} `, h('b', {}, String(value))))),
+    h(
+      'div',
+      { class: 'legend' },
+      legend.map(([label, value, colour, pick]) =>
+        h(
+          pick ? 'button' : 'span',
+          pick
+            ? {
+                class: 'pickable',
+                title: `Open ${entry.name} — ${label.toLowerCase()} only`,
+                onclick: (event) => {
+                  // The card underneath opens the whole register; this figure
+                  // opens the part of it that was actually clicked.
+                  event.stopPropagation();
+                  go({ name: 'register', id: entry.id, filters: { state: pick } });
+                },
+              }
+            : {},
+          h('i', { style: `background:${colour}` }),
+          `${label} `,
+          h('b', {}, String(value)),
+        ),
+      ),
+    ),
   );
 }
 
@@ -1155,7 +1457,9 @@ function toolbar(register, shown) {
     register.kind === 'jobs'
       ? h('select', { onchange: set('state'), value: state.filters.state ?? '' },
           h('option', { value: '' }, 'Any due state'),
-          ['overdue', 'due-soon', 'scheduled', 'undated', 'closed'].map((s) => h('option', { value: s, selected: state.filters.state === s }, STATE_LABEL[s])),
+          [['open', 'Open (not closed)'], ...['overdue', 'due-soon', 'scheduled', 'undated', 'closed'].map((s) => [s, STATE_LABEL[s]])].map(
+            ([value, label]) => h('option', { value, selected: state.filters.state === value }, label),
+          ),
         )
       : null,
     register.kind === 'jobs'
@@ -1177,7 +1481,28 @@ function toolbar(register, shown) {
         )
       : null,
     h('span', { class: 'who' }, `${shown} of ${state.records.length}`),
+    state.can.write && state.selected.size
+      ? h(
+          'button',
+          { class: 'danger', onclick: deleteSelected },
+          `Delete ${state.selected.size} selected`,
+        )
+      : null,
   );
+}
+
+async function deleteSelected() {
+  const ids = [...state.selected];
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? 'entry' : 'entries'}? This cannot be undone.`)) return;
+  try {
+    const { removed } = await api('/records/delete', { method: 'POST', body: { ids } });
+    state.selected = new Set();
+    flash(`Deleted ${removed} ${removed === 1 ? 'entry' : 'entries'}.`);
+    await loadRoute();
+  } catch (error) {
+    fail(error);
+  }
 }
 
 function filterAndSort(register, records) {
@@ -1185,7 +1510,11 @@ function filterAndSort(register, records) {
   const query = (f.q ?? '').trim().toLowerCase();
 
   const rows = records.filter((record) => {
-    if (f.state && record.state !== f.state) return false;
+    // "Open" is every state except closed, so it cannot be compared like the
+    // others — it is the absence of one, not one of them.
+    if (f.state === 'open') {
+      if (record.state === 'closed') return false;
+    } else if (f.state && record.state !== f.state) return false;
     if (f.status && record.derived.status !== f.status) return false;
     if (f.priority && record.derived.priority !== f.priority) return false;
     if (f.owner) {
@@ -1233,9 +1562,30 @@ function recordTable(register, rows) {
   const columns = register.tableColumns.map((key) => register.fields.find((f) => f.key === key)).filter(Boolean);
   const showDue = register.kind === 'jobs' && Boolean(register.roles.due);
 
+  const selectable = state.can.write;
+  const allShown = rows.length > 0 && rows.every((r) => state.selected.has(r.id));
+
   const head = h(
     'tr',
     {},
+    selectable
+      ? h(
+          'th',
+          { class: 'tick' },
+          h('input', {
+            type: 'checkbox',
+            checked: allShown,
+            title: allShown ? 'Clear the selection' : 'Select everything shown',
+            // Everything *shown*, not everything stored: with a filter on, the
+            // rows a person cannot see are not what they meant to tick.
+            onchange: (event) => {
+              if (event.target.checked) for (const r of rows) state.selected.add(r.id);
+              else for (const r of rows) state.selected.delete(r.id);
+              render();
+            },
+          }),
+        )
+      : null,
     columns.map((field) =>
       h(
         'th',
@@ -1258,7 +1608,22 @@ function recordTable(register, rows) {
   const body = rows.map((record) =>
     h(
       'tr',
-      {},
+      { class: state.selected.has(record.id) ? 'picked' : '' },
+      selectable
+        ? h(
+            'td',
+            { class: 'tick' },
+            h('input', {
+              type: 'checkbox',
+              checked: state.selected.has(record.id),
+              onchange: (event) => {
+                if (event.target.checked) state.selected.add(record.id);
+                else state.selected.delete(record.id);
+                render();
+              },
+            }),
+          )
+        : null,
       columns.map((field) =>
         h(
           'td',
@@ -1476,13 +1841,24 @@ function fieldControl(register, field, data, freeText, readOnly) {
   }
 
   if (field.type === 'select') {
+    // A value the sheet brought in that is not on the list stays on the list for
+    // this row. Without it the control shows nothing selected, and saving the
+    // form quietly replaces whatever the import found — SAP's `YM03` in an Order
+    // Type of Emergency/Normal/Urgent, say.
+    const options = field.options.includes(current) || current === '' ? field.options : [...field.options, current];
     return labelled(
       field.label,
       h(
         'select',
         { disabled: readOnly, onchange: set },
         h('option', { value: '' }, '—'),
-        field.options.map((option) => h('option', { value: option, selected: current === option }, option)),
+        options.map((option) =>
+          h(
+            'option',
+            { value: option, selected: current === option },
+            options === field.options || field.options.includes(option) ? option : `${option} (from the sheet)`,
+          ),
+        ),
       ),
     );
   }

@@ -207,6 +207,19 @@ label { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 
 .kpi.overdue .value { color: var(--overdue); }
 .kpi.due-soon .value { color: var(--due-soon); }
 .kpi.closed .value { color: var(--closed); }
+/* A tile that opens a list is a button, and a button brings its own font,
+   alignment and chrome with it. Everything here is undoing that, so a tile
+   reads identically whether or not there is a list behind it. */
+.kpi.kpi-link {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+}
+.kpi.kpi-link:hover { border-color: var(--brand); transform: translateY(-1px); }
+.kpi.kpi-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 /* ---------------------------------------------------------------- Register cards */
 
@@ -230,6 +243,7 @@ label { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 
   width: 100%;
 }
 .register-card:hover { border-color: #c6ced8; }
+.register-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .register-card .rc-top { display: flex; align-items: baseline; gap: 8px; }
 .register-card .rc-top strong { flex: 1; font-size: 14px; }
 .register-card .rc-top .total { font-size: 20px; font-weight: 680; font-variant-numeric: tabular-nums; }
@@ -259,6 +273,22 @@ label { display: block; font-size: 12px; color: var(--ink-soft); margin-bottom: 
 .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 9px; font-size: 12px; color: var(--ink-soft); }
 .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 .legend b { font-variant-numeric: tabular-nums; font-weight: 620; color: var(--ink); }
+/* A figure on a card is its own control: it opens the register filtered to what
+   it counts, so it must not look or behave like the button chrome elsewhere. */
+.legend button.pickable {
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 1px 4px;
+  margin: -1px -4px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.legend button.pickable:hover { background: var(--brand-soft); color: var(--ink); }
+.legend button.pickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 
 /* ---------------------------------------------------------------- Tables */
 
@@ -286,6 +316,9 @@ th {
 }
 th .arrow { color: var(--brand); }
 tbody tr:hover { background: #fafbfc; }
+tbody tr.picked { background: var(--brand-soft); }
+th.tick, td.tick { width: 34px; padding-right: 0; }
+th.tick input, td.tick input { width: auto; margin: 0; }
 td.num { font-variant-numeric: tabular-nums; }
 td .cell-long { display: block; max-width: 380px; }
 td .cell-short { display: block; max-width: 220px; }
@@ -440,6 +473,23 @@ td .cell-short { display: block; max-width: 220px; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+button.chart-label {
+  font: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+button.chart-label:hover { color: var(--brand); text-decoration: underline; }
+button.chart-label:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 3px; }
+
+/* A segment you can open says so on hover — it lifts out of the bar rather
+   than changing colour, because its colour is carrying the state it means. */
+.seg.pickable { cursor: pointer; }
+.track:hover .seg.pickable { filter: saturate(0.75); }
+.seg.pickable:hover { filter: none; box-shadow: inset 0 0 0 1.5px var(--paper); }
+.seg.pickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .chart-value {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -487,6 +537,11 @@ td .cell-short { display: block; max-width: 220px; }
 .column {
   flex: 1 1 0;
   min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -516,6 +571,11 @@ td .cell-short { display: block; max-width: 220px; }
   color: var(--ink-faint);
   white-space: nowrap;
 }
+.column.pickable { cursor: pointer; }
+.column.pickable:hover .column-fill { filter: brightness(1.08); box-shadow: 0 0 0 1.5px var(--brand); }
+.column.pickable:hover .column-label,
+.column.pickable:hover .column-value { color: var(--brand); }
+.column.pickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
 
 /* ---------------------------------------------------------------- Donut */
 
@@ -579,6 +639,27 @@ td .cell-short { display: block; max-width: 220px; }
 .donut-key-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .donut-key-row b { font-variant-numeric: tabular-nums; color: var(--ink); }
 .donut-key-pct { font-variant-numeric: tabular-nums; color: var(--ink-faint); min-width: 34px; text-align: right; }
+.donut-key-row.pickable {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: none;
+  border: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 5px;
+  text-align: left;
+  cursor: pointer;
+}
+.donut-key-row.pickable:hover { background: var(--brand-soft); color: var(--ink); }
+.donut-key-row.pickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+/* The figures in the hole are a label, not a target: left alone they sit on
+   top of the ring and swallow clicks aimed near the middle of it. */
+.donut-total,
+.donut-label { pointer-events: none; }
+.donut .slice { cursor: pointer; }
+.donut:hover .slice { opacity: 0.72; }
+.donut .slice:hover { opacity: 1; }
 
 /* ---------------------------------------------------------------- 3D view */
 

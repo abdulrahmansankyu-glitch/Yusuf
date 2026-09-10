@@ -271,9 +271,71 @@ export async function createApp({ store }) {
       registerId: register.id,
       recordId: existing.id,
       action: 'delete',
-      summary: describe(register, existing.data),
+      // Named as a deletion: without the verb the line is identical to the one
+      // written when the entry was created, and the feed reads as if the work
+      // had just been added again.
+      summary: `${describe(register, existing.data)} — deleted.`,
     });
     res.status(204).end();
+  });
+
+  /**
+   * Delete several entries at once.
+   *
+   * A POST rather than a DELETE because the ids travel in the body, and a DELETE
+   * with a body is refused or silently stripped by enough proxies to be a bad
+   * bet. Every id is checked against the caller's own register list before
+   * anything is removed — a bulk endpoint is exactly where a missing check gets
+   * expensive.
+   */
+  app.post('/api/records/delete', need('write'), async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((id) => typeof id === 'string') : [];
+    if (!ids.length) return res.status(400).json({ error: 'Nothing was selected.' });
+
+    const records = [];
+    for (const id of ids) {
+      const record = await store.get(id);
+      if (!record) continue;
+      if (!guardRegister(req, res, record.registerId)) return;
+      records.push(record);
+    }
+    if (!records.length) return res.status(404).json({ error: 'Those entries no longer exist.' });
+
+    const removed = await store.remove(records.map((r) => r.id));
+
+    // One line in the activity feed, not forty. Deleting a page of rows is one
+    // decision, and forty entries would bury everything else that happened.
+    const byRegister = new Map();
+    for (const record of records) {
+      byRegister.set(record.registerId, (byRegister.get(record.registerId) ?? 0) + 1);
+    }
+    for (const [registerId, count] of byRegister) {
+      await store.log({
+        actor: req.user.name,
+        registerId,
+        action: 'delete',
+        summary: `${getRegister(registerId).name}: deleted ${count} ${count === 1 ? 'entry' : 'entries'}.`,
+      });
+    }
+
+    res.json({ removed });
+  });
+
+  /**
+   * Every job record the reader may see, across registers.
+   *
+   * The dashboard counts jobs from every register at once, so clicking one of
+   * those figures has to land somewhere that can show them all — a per-register
+   * page cannot answer "the eleven things that are overdue".
+   */
+  app.get('/api/records', need('read'), async (req, res) => {
+    const visible = new Set(visibleRegisters(req.user));
+    const today = todayIso();
+    const records = (await store.list())
+      .filter((r) => visible.has(r.registerId) && getRegister(r.registerId)?.kind === 'jobs')
+      .map((r) => decorate(r, today))
+      .filter(Boolean);
+    res.json({ records, today });
   });
 
   /**

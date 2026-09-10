@@ -1,6 +1,6 @@
 # Engineering Planning Tracker
 
-Shared tracking for the engineering department's planning workbook — fifteen
+Shared tracking for the maintenance department's planning workbook — sixteen
 registers, one dashboard, and the team's own Excel file as the way data goes in
 and comes out.
 
@@ -31,7 +31,7 @@ are the whole point of the sheets that have them.
 | Commercial | `Commerial` | Purchase requisitions | PR Closing Date |
 | General Activities | `GAF` | Activities followed up against a tag | ETC |
 | Fabrication Workshop | `Fab WS` | Jobs on the workshop floor | ETC |
-| Planner PMs | `Planner PMs` | Preventive maintenance orders from SAP | Planned Date |
+| Planner CMs | `Planner PMs` | Corrective maintenance orders from SAP | Planned Date |
 | Assigned Jobs | `Assinged Jobs` | Jobs handed down by the line manager | ETC |
 | Overhauling Status | `Overhauling Status` | Equipment out for overhaul | ETC |
 | MOC | `MOC` | Management-of-change packages | ETC |
@@ -43,6 +43,17 @@ are the whole point of the sheets that have them.
 | Rental Equipment | `Rental Resourecs Eq` | Hired plant on site | Demobilization |
 | Rental Manpower | `Rental Resourecs MP` | Hired trades on site | Demobilize |
 | Equipment Outside | `EOS Out Side` | Equipment away for repair | Mobilization Date (the day it is due back) |
+
+### History
+
+| Register | Sheet | What it holds |
+|---|---|---|
+| Equipment History | one sheet per unit (`Rotary Joint`, `Winch Drum`, …) | What was done to a unit, and when |
+
+A history sheet is shaped the other way round from the rest: a date down the
+side and a column per unit, one cell per thing that happened. It is unpivoted on
+import into one record per event, and it never reaches the due or overdue counts
+— it is a record of what has been done, not a list of what is outstanding.
 
 ### People
 
@@ -56,27 +67,46 @@ so they answer *how much of the grid is filled*, not *what is due*.
 | JTS Programme | `JTS` | Four quarters, with the total worked out |
 | Safety Training | `Safety` | Fifteen courses |
 
-What makes one dashboard possible across all fifteen is that every register
+What makes one dashboard possible across all sixteen is that every register
 declares which of *its own* columns answers each shared question: what is this,
 who owns it, when is it due, how urgent is it. That mapping lives in one place —
-[`src/registers.js`](src/registers.js) — and adding a sixteenth register is a
+[`src/registers.js`](src/registers.js) — and adding a seventeenth register is a
 change to that file and nothing else.
 
 ---
 
 ## The dashboard
 
-- **Total · Open · Overdue · Due in 30 days · Closed · No date set** across every
-  register the reader may open, with a people-sheet coverage figure beside them.
-- **A card per register** — overdue, due soon, open and closed, summing to that
-  register's total, with all four printed underneath.
-- **Needs attention** — everything overdue or due inside a month, soonest first,
-  and where two rows fall on the same day the more urgent one leads.
-- **Recent changes** — who changed what, and when.
+Five tabs over the same figures, because the same question gets asked in
+different shapes:
+
+- **Overview** — **Total · Open · Overdue · Due in 30 days · Closed · No date
+  set** across every register the reader may open, a people-sheet coverage
+  figure beside them, a ring of the whole workload by state, a card per
+  register, **Needs attention** (everything overdue or due inside a month,
+  soonest first, the more urgent one leading on a tie) and **Recent changes**.
+- **Charts** — the workload as two rings (by state, and open work by priority),
+  a bar per register, and a column per week showing when open work falls due.
+- **3D view** — the department as a landscape, one column per register, its
+  height the work still open on it. Drag to turn the camera.
+- **People** — how much of each matrix is filled.
+- **All jobs** — every job in every register in one list, filterable by
+  register, due state, priority and free text.
+
+**Every figure opens the list behind it.** A tile, a slice of a ring, a segment
+of a bar, a week's column: clicking it lands on **All jobs** already filtered to
+exactly what was counted, and each row there opens the entry itself. A number
+nobody can get behind is a number nobody can act on.
 
 Priority, status, owner, due window and free text are all filterable inside each
 register, and the table sorts on any column. Blanks sort last whichever way the
 column is pointing.
+
+**Deleting.** An entry is deleted from its own drawer. To clear several at once,
+tick them in the left-hand column and use **Delete _n_ selected** — the tick in
+the header takes everything *shown*, so with a filter on it takes what is on
+screen and not the rows behind it. A bulk delete writes one line to the activity
+feed per register, not one per row.
 
 On the people sheets there is a **coverage panel** instead: how many people hold
 each course, or have each month planned. Courses are listed thinnest first —
@@ -322,7 +352,7 @@ Plain ES modules, no build step and no framework, on both sides. The file in the
 repository is the file that runs: open `public/app.js`, change it, reload.
 
 ```
-src/registers.js   the fifteen registers, and how each maps onto the shared shape
+src/registers.js   the sixteen registers, and how each maps onto the shared shape
 src/dates.js       every way the workbook writes a date, and the one way it is stored
 src/excel.js       reading the real workbook; writing one that reads back in
 src/summary.js     the figures the dashboard, the sidebar and the Summary sheet share
