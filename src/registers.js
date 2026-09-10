@@ -299,8 +299,11 @@ export const REGISTERS = [
       date('etc', 'ETC', ['etc', 'estimated completion', 'target date']),
       select('iwo', 'IWO', ['Yes', 'No'], ['iwo', 'iwo no', 'iwo raised']),
       text('prNo', 'PR no', ['pr no', 'pr number', 'prno']),
-      suggest('resources', 'Resources', ['Manpower', 'Material', 'Machinery'], ['resources', 'resource']),
-      suggest('supplier', 'Supplier', ['Contractor', 'Inhouse'], ['supplier', 'suppiler']),
+      // Typed by hand rather than picked. The sheet's legend listed three
+      // resources and two suppliers; what actually gets written is a mix of
+      // trades, materials and contractor names that no list of three covers.
+      text('resources', 'Resources', ['resources', 'resource']),
+      text('supplier', 'Supplier', ['supplier', 'suppiler']),
       // The sheet carries no status column, so the app owns this one. It is
       // written into the export and read back on the way in, or the one piece
       // of state the app adds would be lost on every round trip.
@@ -335,7 +338,7 @@ export const REGISTERS = [
     // the columns decide anyway.
     sheetAliases: ['commerial', 'commercial', 'pr status', 'pr'],
     identityFields: ['jobDescription', 'prNo', 'initiator'],
-    tableColumns: ['prNo', 'jobDescription', 'initiator', 'prIssuedDate', 'quotationStatus', 'prStatus', 'prClosingDate'],
+    tableColumns: ['prNo', 'jobDescription', 'initiator', 'prIssuedDate', 'quotationStatus', 'material', 'followUp', 'prStatus', 'prClosingDate'],
     fields: [
       select('priority', 'Priorty', PRIORITY_VALUES, ['priorty', 'priority']),
       text('initiator', 'Job Initaitor', ['job initaitor', 'job initiator', 'initiator', 'raised by']),
@@ -350,7 +353,7 @@ export const REGISTERS = [
         ['quotation status', 'quotation'],
       ),
       text('iwo', 'IWO', ['iwo', 'iwo no']),
-      suggest('material', 'Material', ['Ordered', 'Delivered', 'Partially delivered', 'Not ordered'], ['material', 'material status']),
+      text('material', 'Material', ['material', 'material status']),
       longtext('followUp', 'Follow up', ['follow up', 'followup', 'follow-up']),
       select('prStatus', 'PR Status', ['Open', 'Close'], ['pr status', 'prstatus', 'status']),
       date('prClosingDate', 'PR Closing Date', ['pr closing date', 'closing date', 'closed on']),
@@ -417,12 +420,12 @@ export const REGISTERS = [
     short: 'FAB',
     kind: 'jobs',
     group: 'Work',
-    description: 'Jobs on the fabrication workshop floor, with material and progress.',
+    description: 'Jobs on the fabrication workshop floor, with material and resources.',
     sheetName: 'Fab WS',
     banner: 'FABRICATION WORKSHOP',
     sheetAliases: ['fab ws', 'fabrication workshop', 'fab', 'workshop'],
     identityFields: ['jobDescription'],
-    tableColumns: ['jobDescription', 'assignedTo', 'prNo', 'materialStatus', 'progress', 'etc', 'status'],
+    tableColumns: ['jobDescription', 'assignedTo', 'prNo', 'materialStatus', 'resources', 'etc', 'status'],
     fields: [
       longtext('jobDescription', 'Job Description', ['job description', 'description']),
       text('assignedTo', 'assigne to', OWNER),
@@ -433,9 +436,8 @@ export const REGISTERS = [
         ['Available', 'Ordered', 'Partially available', 'Not available'],
         ['material status', 'material'],
       ),
-      number('progress', 'Progress', ['progress', 'percent complete', 'completion', '%']),
       date('etc', 'ETC', ['etc', 'estimated completion', 'target date']),
-      suggest('resources', 'Resources', ['Manpower', 'Material', 'Machinery'], ['resources', 'resource']),
+      text('resources', 'Resources', ['resources', 'resource']),
       select('status', 'Status', STATUSES, ['status', 'tracker status']),
       select('priority', 'Priority', PRIORITY_VALUES, ['priorty', 'priority']),
       longtext('remarks', 'Remarks', REMARKS),
@@ -446,7 +448,6 @@ export const REGISTERS = [
       priority: 'priority',
       status: 'status',
       actionBy: 'assignedTo',
-      progress: 'progress',
     },
   },
 
@@ -455,23 +456,36 @@ export const REGISTERS = [
    * ---------------------------------------------------------------- */
   {
     id: 'planner-pm',
-    name: 'Planner PMs',
-    short: 'PM',
+    // Renamed to CM at the team's request. The id stays `planner-pm` so the
+    // records already imported under it keep their register.
+    name: 'Planner CMs',
+    short: 'CM',
     kind: 'jobs',
     group: 'Work',
-    description: 'Preventive maintenance orders as SAP issues them, planned against executed.',
-    sheetName: 'Planner PMs',
+    description: 'Corrective maintenance orders as SAP issues them, planned against executed.',
+    // Exports carry the new name; the old one stays in `sheetAliases` below, so
+    // a sheet pasted out of SAP and still headed "Planner PMs" still lands here.
+    sheetName: 'Planner CMs',
     // The only sheet with no banner at all: it is pasted straight out of SAP, so
     // row 1 is blank and the header is row 2 with nothing above it.
     banner: '',
-    sheetAliases: ['planner pms', 'planner pm', 'pm', 'planner'],
+    sheetAliases: ['planner cms', 'planner cm', 'cm', 'planner pms', 'planner pm', 'pm', 'planner'],
     identityFields: ['order', 'description', 'technicalObject'],
-    tableColumns: ['order', 'sortField', 'description', 'orderType', 'priorityText', 'userStatus', 'plannedDate', 'executionDate'],
+    tableColumns: ['order', 'notification', 'workCenter', 'description', 'orderType', 'userStatus', 'plannedDate', 'executionDate'],
     fields: [
       text('plantSection', 'Plant Section', ['plant section', 'section', 'plant']),
-      text('workCenter', 'Main Work Center', ['main work center', 'main work centre', 'work center', 'work centre']),
+      text('workCenter', 'Equipments Tag', [
+        'equipments tag',
+        'equipment tag',
+        // What SAP calls the column the tag arrives in.
+        'main work center',
+        'main work centre',
+        'work center',
+        'work centre',
+      ]),
       text('order', 'Order', ['order', 'order no', 'order number']),
-      text('orderType', 'Order Type', ['order type', 'ordertype']),
+      text('notification', 'Notification', ['notification', 'notification no', 'notif no', 'notif']),
+      select('orderType', 'Order Type', ['Emergency', 'Normal', 'Urgent'], ['order type', 'ordertype']),
       text('sortField', 'Sort Field', ['sort field', 'sortfield', 'tag']),
       longtext('technicalObject', 'Description of technical object', [
         'description of technical object',
@@ -516,7 +530,7 @@ export const REGISTERS = [
     banner: 'ASSIGNED TO ME BY MANAGEMENT (LINE MANAGER)',
     sheetAliases: ['assinged jobs', 'assigned jobs', 'assigned to me by management'],
     identityFields: ['jobDescription'],
-    tableColumns: ['jobDescription', 'initiator', 'priority', 'status', 'etc'],
+    tableColumns: ['jobDescription', 'initiator', 'actionBy', 'materialStatus', 'priority', 'status', 'etc'],
     fields: [
       select('priority', 'Priorty', PRIORITY_VALUES, ['priorty', 'priority']),
       longtext('jobDescription', 'Job Description', ['job description', 'description']),
@@ -524,6 +538,12 @@ export const REGISTERS = [
       select('status', 'Status', STATUSES, ['status']),
       date('etc', 'ETC', ['etc', 'estimated completion', 'target date']),
       text('actionBy', 'Action By', OWNER),
+      select(
+        'materialStatus',
+        'Material Status',
+        ['Need to arrange', 'Waiting', 'Not received'],
+        ['material status', 'material'],
+      ),
       longtext('remarks', 'Remarks', REMARKS),
     ],
     roles: {
@@ -1155,21 +1175,11 @@ export function deriveRecord(register, data, { toDateOnly }) {
     supplier: str('supplier'),
     discipline: str('discipline'),
     location: str('location'),
-    progress: toProgress(pick('progress')),
     // For the people sheets: how much of this person's row is filled in, which
     // is the only "how are we doing" question a matrix can answer.
     filledCells: filled,
     totalCells: matrix ? matrix.cells.length : null,
   };
-}
-
-/** `80`, `80%` and `0.8` all mean the same thing in a Progress column. */
-function toProgress(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(String(value).replace('%', '').trim());
-  if (!Number.isFinite(n)) return null;
-  if (n > 0 && n <= 1) return Math.round(n * 100);
-  return Math.max(0, Math.min(100, Math.round(n)));
 }
 
 /** Serialisable definitions for the browser, so the UI is never a second source of truth. */
